@@ -1,4 +1,7 @@
-﻿using System.Net;
+﻿//#define PRINT_DATA
+
+using System.Collections.Generic;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -7,49 +10,53 @@ namespace CodeTestsConsole
 {
     public static class TcpTests
     {
+        internal static ILogger Logger = new ConsoleLogger();
+
+        internal static ServerProcessor Processor;
+
         public static void TcpClientServerSendReceive()
         {
-            var logger = new ConsoleLogger();
+            // Start TCP server.
 
             var serverEndpoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 27005);
 
-            var server = new TcpSocketListener(logger, clientCapacity: 2, maxPacketSize: 256, packetQueueCapacity: 4);
+            var server = new TcpSocketListener(Logger, clientCapacity: 2, maxPacketSize: 256, packetQueueCapacity: 4);
             server.Start(serverEndpoint);
 
-            //var serverThread = new Thread(server.Receive);
-            //serverThread.Start();
+            Processor = new ServerProcessor(Logger, capacity: 2);
 
-            var serverProcessor = new ServerProcesser(serverBuffer, logger);
+            server.Clients.OnClientAdded += Clients_OnClientAdded;
+            server.Clients.OnClientRemoved += Clients_OnClientRemoved;
 
-            var thread = new Thread(serverProcessor.Run);
-            thread.Start();
+            var serverThread = new Thread(Processor.Run);
+            serverThread.Start();
 
-            const int ClientCount = 1;
+            // TCP clients connecto to server.
+
+            const int ClientCount = 10;
 
             var clients = new TcpSocketClient[ClientCount];
 
-            for (int i= 0; i< clients.Length; i++)
+            for (int i= 0; i < clients.Length; i++)
             {
-                clients[i] = new TcpSocketClient(logger);
+                clients[i] = new TcpSocketClient(Logger);
                 clients[i].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
             }
-
-            //var client = new TcpSocketClient(logger);
-
-            //client.Connect(serverEp.Address.ToString(), serverEp.Port);
 
             var serializer = new Serializer();
             var sendStr = $"Client Message: {new string('c', 128)}";
 
+            // Send requests from clients to server.
+
             byte[] sendData = new byte[256];
 
-            const int RoundTripCount = 100000;
+            const int TestRequestCount = 10000;
 
-            logger.Info($"Executing {RoundTripCount:N0} send/receive requests for {ClientCount} clients.");
+            Logger.Info($"Executing {TestRequestCount:N0} send/receive requests for {ClientCount} clients.");
 
-            using (var sw = new LoggerStopWatch(logger))
+            using (var sw = new LoggerStopWatch(Logger))
             {
-                for (int i = 0; i < RoundTripCount; i++)
+                for (int i = 0; i < TestRequestCount; i++)
                 {
                     for (int j = 0; j < clients.Length; j++)
                     {
@@ -64,15 +71,16 @@ namespace CodeTestsConsole
                         client.Read(recvData, 0, recvData.Length, out int receiveBytes);
 
                         serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
-
-                        //logger.Info($"Client {j} Receive: {recvText}");
+#if PRINT_DATA
+                        Logger.Info($"Client {j} Receive: {recvText}");
+#endif //PRINT_DATA
                     }
                 }
             }
 
-            serverProcessor.Stop = true;
+            Processor.Stop = true;
 
-            while (thread.ThreadState != ThreadState.Stopped) { }
+            //while (thread.ThreadState != ThreadState.Stopped) { }
 
 #if NEVER
 
@@ -114,19 +122,48 @@ namespace CodeTestsConsole
             server.Stop();
         }
 
-        private class ServerProcesser
+        private static void Clients_OnClientRemoved(object sender, TcpSocketListener.TcpClientsEventArgs e)
+        {
+            Processor.Remove(e.ReceiveBuffer);
+        }
+
+        private static void Clients_OnClientAdded(object sender, TcpSocketListener.TcpClientsEventArgs e)
+        {
+            Processor.Add(e.ReceiveBuffer);
+        }
+
+        internal class ServerProcessor
         {
             public bool Stop = false;
 
-            private readonly TcpReceiveBuffer _buffer;
+            private readonly List<TcpReceiveBuffer> Buffers;
             private readonly ILogger _logger;
 
             private TcpClient _remoteClient;
 
-            public ServerProcesser(TcpReceiveBuffer buffer, ILogger logger)
+            private static object _lock = new object();
+
+            public ServerProcessor(ILogger logger, int capacity)
             {
-                _buffer = buffer;
                 _logger = logger;
+
+                Buffers = new List<TcpReceiveBuffer>(capacity);
+            }
+
+            public void Add(TcpReceiveBuffer buffer)
+            {
+                lock (_lock)
+                {
+                    Buffers.Add(buffer);
+                }
+            }
+
+            public void Remove(TcpReceiveBuffer buffer)
+            {
+                lock (_lock)
+                {
+                    Buffers.Remove(buffer);
+                }
             }
 
             public void Run()
@@ -137,23 +174,30 @@ namespace CodeTestsConsole
 
                 while (!Stop)
                 {
-                    if (_buffer.GetReadData(out byte[] data, out int offset, out int count))
+                    lock (_lock)
                     {
-                        serializer.Deserialize(data, 0, count, out string recvText);
+                        foreach (var buffer in Buffers)
+                        {
+                            if (buffer.GetReadData(out byte[] data, out int offset, out int count))
+                            {
+                                serializer.Deserialize(data, 0, count, out string recvText);
+#if PRINT_DATA
+                        _logger.Info($"Server received: {recvText}");
+#endif //PRINT_DATA
 
-                        //_logger.Info($"Server received: {recvText}");
+                                buffer.GetClient(out _remoteClient);
 
-                        _buffer.GetClient(out _remoteClient);
+                                buffer.NextRead(closeConnection: false);
 
-                        _buffer.NextRead(closeConnection: false);
+                                var stream = _remoteClient.GetStream();
 
-                        var stream = _remoteClient.GetStream();
+                                var writeData = new byte[256];
 
-                        var writeData = new byte[256];
+                                serializer.Serialize(sendStr, writeData, out int writeCount);
 
-                        serializer.Serialize(sendStr, writeData, out int writeCount);
-
-                        stream.Write(writeData, 0, writeCount);
+                                stream.Write(writeData, 0, writeCount);
+                            }
+                        }
                     }
                 }
             }

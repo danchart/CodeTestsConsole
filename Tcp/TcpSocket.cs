@@ -5,13 +5,13 @@
     using System.Net.Sockets;
     using System.Threading;
 
-    public class TcpSocketListener
+    public sealed class TcpSocketListener
     {
+        public readonly TcpClients Clients;
+
         private bool _isRunning;
 
         private TcpListener _listener;
-
-        private readonly TcpClients _tcpClients;
 
         private readonly ILogger _logger;
 
@@ -23,7 +23,7 @@
 
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            this._tcpClients = new TcpClients(clientCapacity);
+            this.Clients = new TcpClients(clientCapacity);
 
             this.MaxPacketSize = maxPacketSize;
             this.PacketQueueCapacity = packetQueueCapacity;
@@ -141,7 +141,7 @@
                 Stream = stream,
                 ReceiveBuffer = buffer,
             };
-            this._tcpClients.Add(clientData);
+            this.Clients.Add(clientData);
 
             buffer.GetWriteData(out byte[] data, out int offset, out int size);
             stream.BeginRead(data, offset, size, AcceptRead, clientData);
@@ -170,7 +170,7 @@
                 return;
             }
 
-            TcpClientData clientData = (TcpClientData)ar;
+            TcpClientData clientData = (TcpClientData)ar.AsyncState;
             NetworkStream stream = clientData.Stream; ;
 
             int bytesRead = stream.EndRead(ar);
@@ -193,7 +193,7 @@
             public TcpReceiveBuffer ReceiveBuffer { get; private set; }
         }
 
-        private sealed class TcpClients
+        public sealed class TcpClients
         {
             private TcpClientData[] _clients;
             private int _count;
@@ -226,7 +226,7 @@
             public event EventHandler<TcpClientsEventArgs> OnClientAdded;
             public event EventHandler<TcpClientsEventArgs> OnClientRemoved;
 
-            public ref TcpClientData Get(int index) => ref this._clients[index];
+            public TcpClientData Get(int index) => this._clients[index];
 
             public void Lock()
             {
@@ -336,7 +336,7 @@
             }
         }
 
-        internal class TcpClientData
+        public class TcpClientData
         {
             public TcpClient Client;
             public NetworkStream Stream;

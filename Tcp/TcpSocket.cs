@@ -378,9 +378,12 @@
         public void Send(
             byte[] data,
             int offset,
-            int size)
+            ushort count)
         {
-            _stream.Write(data, offset, size);
+            var sizePreambleBytes = BitConverter.GetBytes((ushort)count);
+
+            _stream.Write(sizePreambleBytes, offset, sizePreambleBytes.Length);
+            _stream.Write(data, offset, count);
         }
 
         public void Read(
@@ -389,7 +392,19 @@
             int receiveSize,
             out int receivedBytes)
         {
-            receivedBytes = _stream.Read(receiveData, receiveOffset, receiveSize);
+            byte[] sizePreambleBytes = new byte[2];
+
+            _stream.Read(sizePreambleBytes, 0, 2);
+
+            ushort size = BitConverter.ToUInt16(sizePreambleBytes, 0);
+
+            if (size > receiveSize)
+            {
+                throw new InvalidOperationException($"Receive buffer smaller than packet size.");
+            }
+
+            //receivedBytes = _stream.Read(receiveData, receiveOffset, receiveSize);
+            receivedBytes = _stream.Read(receiveData, receiveOffset, size);
         }
     }
 }

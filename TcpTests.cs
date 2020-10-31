@@ -10,15 +10,14 @@ namespace CodeTestsConsole
         public static void TcpClientServerSendReceive()
         {
             var logger = new ConsoleLogger();
-            var serverBuffer = new TcpReceiveBuffer(maxPacketSize: 256, packetQueueCapacity: 4);
 
-            var serverEp = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 27005);
+            var serverEndpoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 27005);
 
-            var server = new TcpSocketListener(logger, serverBuffer);
-            server.Start(serverEp);
+            var server = new TcpSocketListener(logger, clientCapacity: 2, maxPacketSize: 256, packetQueueCapacity: 4);
+            server.Start(serverEndpoint);
 
-            var serverThread = new Thread(server.Receive);
-            serverThread.Start();
+            //var serverThread = new Thread(server.Receive);
+            //serverThread.Start();
 
             var serverProcessor = new ServerProcesser(serverBuffer, logger);
 
@@ -32,7 +31,7 @@ namespace CodeTestsConsole
             for (int i= 0; i< clients.Length; i++)
             {
                 clients[i] = new TcpSocketClient(logger);
-                clients[i].Connect(serverEp.Address.ToString(), serverEp.Port);
+                clients[i].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
             }
 
             //var client = new TcpSocketClient(logger);
@@ -46,7 +45,7 @@ namespace CodeTestsConsole
 
             const int RoundTripCount = 100000;
 
-            logger.Info($"Executing {RoundTripCount:N0} send/receive requests.");
+            logger.Info($"Executing {RoundTripCount:N0} send/receive requests for {ClientCount} clients.");
 
             using (var sw = new LoggerStopWatch(logger))
             {

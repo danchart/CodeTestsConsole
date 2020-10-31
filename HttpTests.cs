@@ -1,6 +1,9 @@
 ﻿using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace CodeTestsConsole
 {
@@ -10,12 +13,19 @@ namespace CodeTestsConsole
         {
             var logger = new ConsoleLogger();
 
+            var endpoint = "http://localhost:27007/";
+
             var server = new HttpServer(
-                new string[] { "http://localhost:27007/" }, 
+                new string[] { endpoint }, 
                 logger);
 
             server.Start();
 
+            WorkerAsync(endpoint, logger).Wait();
+        }
+
+        private static async Task WorkerAsync(string endpoint, ILogger logger)
+        {
             const int RoundTripCount = 10000;
 
             logger.Info($"Executing {RoundTripCount:N0} send/receive requests.");
@@ -26,10 +36,10 @@ namespace CodeTestsConsole
                 {
                     for (int i = 0; i < RoundTripCount; i++)
                     {
-                        var response = httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:27007")
+                        var response = await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Post, endpoint)
                         {
                             Content = new StringContent("Hello, world")
-                        }).Result;
+                        });
 
                         //logger.Info($"Received {response.Content.ReadAsStringAsync().Result}");
                     }
@@ -75,10 +85,10 @@ namespace CodeTestsConsole
 
                 // Construct a response.
                 string responseString = "<HTML><BODY> Hello world!</BODY></HTML>";
-                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseString);
+                byte[] buffer = Encoding.UTF8.GetBytes(responseString);
                 // Get a response stream and write the response to it.
                 response.ContentLength64 = buffer.Length;
-                System.IO.Stream output = response.OutputStream;
+                Stream output = response.OutputStream;
                 output.Write(buffer, 0, buffer.Length);
                 // You must close the output stream.
                 output.Close();

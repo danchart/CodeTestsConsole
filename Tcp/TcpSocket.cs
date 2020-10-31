@@ -1,5 +1,6 @@
 ﻿namespace CodeTestsConsole
 {
+    using Networking.Core;
     using System;
     using System.Net;
     using System.Net.Sockets;
@@ -12,6 +13,8 @@
         private bool _isRunning;
 
         private TcpListener _listener;
+
+        private byte[] _acceptReadBuffer;
 
         private readonly ILogger _logger;
 
@@ -27,6 +30,8 @@
 
             this.MaxPacketSize = maxPacketSize;
             this.PacketQueueCapacity = packetQueueCapacity;
+
+            this._acceptReadBuffer = new byte[MaxPacketSize];
         }
 
         public bool IsRunning => this._isRunning;
@@ -83,8 +88,10 @@
             };
             this.Clients.Add(clientData);
 
-            buffer.GetWriteData(out byte[] data, out int offset, out int size);
-            stream.BeginRead(data, offset, size, AcceptRead, clientData);
+            //buffer.GetWriteData(out byte[] data, out int offset, out int size);
+            //stream.BeginRead(data, offset, size, AcceptRead, clientData);
+
+            stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
 
             this._logger.Info($"Connected. RemoteEp={client.Client.RemoteEndPoint}");
 
@@ -105,11 +112,37 @@
 
             int bytesRead = stream.EndRead(ar);
 
-            clientData.ReceiveBuffer.NextWrite(bytesRead, clientData.Client);
+            // Seperate stream into packets before adding to the receive buffer.
+
+            int pos = 0;
+            while (pos < bytesRead)
+            {
+                var packetSize = BitConverter.ToUInt16(this._acceptReadBuffer, pos);
+
+                if (packetSize > bytesRead - 2)
+                {
+                    throw new InvalidOperationException($"Invalid packet received: packetSize={packetSize}, bytesRead={bytesRead}");
+                }
+
+                clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+
+                Array.Copy(this._acceptReadBuffer, pos + 2, data, 0, packetSize);
+
+                pos += 2;
+                pos += packetSize;
+
+                clientData.ReceiveBuffer.NextWrite(packetSize, clientData.Client);
+            }
+
+            //clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+
+            //clientData.ReceiveBuffer.NextWrite(bytesRead, clientData.Client);
 
             // Begin waiting for more stream data.
-            clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
-            stream.BeginRead(data, offset, size, AcceptRead, clientData);
+            stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
+
+            //clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+            //stream.BeginRead(data, offset, size, AcceptRead, clientData);
         }
 
         public class TcpClientsEventArgs : EventArgs
@@ -309,10 +342,7 @@
             int offset,
             ushort count)
         {
-            var sizePreambleBytes = BitConverter.GetBytes((ushort)count);
-
-            _stream.Write(sizePreambleBytes, offset, sizePreambleBytes.Length);
-            _stream.Write(data, offset, count);
+            _stream.WriteWithSizePreamble(data, offset, count);
         }
 
         public void Read(
@@ -321,19 +351,7 @@
             int receiveSize,
             out int receivedBytes)
         {
-            byte[] sizePreambleBytes = new byte[2];
-
-            _stream.Read(sizePreambleBytes, 0, 2);
-
-            ushort size = BitConverter.ToUInt16(sizePreambleBytes, 0);
-
-            if (size > receiveSize)
-            {
-                throw new InvalidOperationException($"Receive buffer smaller than packet size.");
-            }
-
-            //receivedBytes = _stream.Read(receiveData, receiveOffset, receiveSize);
-            receivedBytes = _stream.Read(receiveData, receiveOffset, size);
+            _stream.ReadWithSizePreamble(receiveData, receiveOffset, receiveSize, out receivedBytes);
         }
     }
 }

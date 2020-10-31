@@ -1,6 +1,8 @@
 ﻿//#define PRINT_DATA
 
 using MessagePack;
+using Networking.Core;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -14,6 +16,8 @@ namespace CodeTestsConsole
         internal static ILogger Logger = new ConsoleLogger();
 
         internal static ServerProcessor Processor;
+
+        internal static Random Random = new Random();
 
         public static void TcpClientServerSendReceive()
         {
@@ -57,7 +61,7 @@ namespace CodeTestsConsole
 
             var msgPackData = new SampleDataMsgPack
             {
-                MyNumber = 123,
+                ClientId = 123,
                 MyFloat = 456.0f,
                 MyString = "abcdefghijklmnopqrstuvwxyz.",
             };
@@ -66,6 +70,24 @@ namespace CodeTestsConsole
             {
                 for (int i = 0; i < TestRequestCount; i++)
                 {
+                    var client = clients[Random.Next() % clients.Length];
+
+                    var sendData = MessagePackSerializer.Serialize(msgPackData);
+
+                    client.Send(sendData, 0, (ushort)sendData.Length);
+
+                    byte[] recvData = new byte[12000];
+
+                    client.Read(recvData, 0, recvData.Length, out int receiveBytes);
+
+                    var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(recvData);
+
+                    //serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
+#if PRINT_DATA
+                        Logger.Info($"Client {j} Receive: {receivedObj}");
+#endif //PRINT_DATA
+
+#if MOTHBALL
                     for (int j = 0; j < clients.Length; j++)
                     {
                         var client = clients[j];
@@ -81,12 +103,22 @@ namespace CodeTestsConsole
 
                         client.Read(recvData, 0, recvData.Length, out int receiveBytes);
 
-                        serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
+                        var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(recvData);
+
+                        //serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
 #if PRINT_DATA
-                        Logger.Info($"Client {j} Receive: {recvText}");
+                        Logger.Info($"Client {j} Receive: {receivedObj}");
 #endif //PRINT_DATA
-                    }
                 }
+#endif
+                }
+            }
+
+            Logger.Info("Client counts:");
+
+            for (int i = 0; i < clients.Length; i++)
+            {
+                Logger.Info($"Client {i}: {(Processor.ClientCounts.ContainsKey(i) ? Processor.ClientCounts[i] : 0)}");
             }
 
             Processor.Stop = true;
@@ -147,6 +179,8 @@ namespace CodeTestsConsole
         {
             public bool Stop = false;
 
+            public readonly Dictionary<int, int> ClientCounts = new Dictionary<int, int>();
+
             private readonly List<TcpReceiveBuffer> Buffers;
             private readonly ILogger _logger;
 
@@ -191,9 +225,19 @@ namespace CodeTestsConsole
                         {
                             if (buffer.GetReadData(out byte[] data, out int offset, out int count))
                             {
-                                serializer.Deserialize(data, 0, count, out string recvText);
+                                //serializer.Deserialize(data, 0, count, out string recvText);
+
+                                var dataObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(data);
+
+                                if (!ClientCounts.ContainsKey(dataObj.ClientId))
+                                {
+                                    ClientCounts[dataObj.ClientId] = 0;
+                                }
+
+                                ClientCounts[dataObj.ClientId] = ClientCounts[dataObj.ClientId] + 1;
+
 #if PRINT_DATA
-                        _logger.Info($"Server received: {recvText}");
+                        _logger.Info($"Server received: {dataObj}");
 #endif //PRINT_DATA
 
                                 buffer.GetClient(out _remoteClient);
@@ -202,11 +246,18 @@ namespace CodeTestsConsole
 
                                 var stream = _remoteClient.GetStream();
 
-                                var writeData = new byte[256];
+                                //var writeData = new byte[256];
 
-                                serializer.Serialize(sendStr, writeData, out int writeCount);
+                                //serializer.Serialize(sendStr, writeData, out int writeCount);
 
-                                stream.Write(writeData, 0, writeCount);
+                                var writeData = MessagePackSerializer.Serialize(new SampleDataMsgPack
+                                {
+                                    ClientId = 321,
+                                    MyFloat = 654,
+                                    MyString = "The quick brown fox jumped over the lazy dogs.",
+                                });
+
+                                stream.WriteWithSizePreamble(writeData, 0, (ushort)writeData.Length);
                             }
                         }
                     }
@@ -237,16 +288,21 @@ namespace CodeTestsConsole
         }
 
         [MessagePackObject]
-        private class SampleDataMsgPack
+        public class SampleDataMsgPack
         {
             [Key(0)]
-            public int MyNumber;
+            public int ClientId;
 
             [Key(1)]
             public float MyFloat;
 
             [Key(2)]
             public string MyString;
+
+            public override string ToString()
+            {
+                return $"ClientId={ClientId}, MyFloat={MyFloat}, MyString={MyString}";
+            }
         }
     }
 }

@@ -1,8 +1,8 @@
-﻿using System.Net.Sockets;
-using System.Threading;
-
-namespace CodeTestsConsole
+﻿namespace CodeTestsConsole
 {
+    using System.Net.Sockets;
+    using System.Threading;
+
     public class TcpReceiveBuffer
     {
         public readonly int MaxPacketSize;

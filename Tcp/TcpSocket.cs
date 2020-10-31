@@ -45,77 +45,17 @@
 
             _listener.BeginAcceptTcpClient(AcceptClient, _listener);
         }
-#if NEVER
-        public void Receive()
+
+        public void Stop()
         {
-            while (this._isRunning)
-            {
-                this._tcpClients.Lock();
+            this._isRunning = false;
 
-                try
-                {
-                    for (int i = 0; i < this._tcpClients.Count; i++)
-                    {
-                        ref readonly TcpClientData clientData = ref this._tcpClients.Get(i);
-                        TcpClient client = clientData.Client;
+            // Wait a short period to ensure the cancellation flag has propagated. 
+            Thread.Sleep(100);
 
-                        if (!client.Connected)
-                        {
-                            _logger.Warning($"TCP client disconnected: clientEp={client.Client.RemoteEndPoint}");
-
-                            this._tcpClients.RemoveAndClose(i);
-
-                            continue;
-                        }
-
-                        NetworkStream stream = clientData.Stream;
-
-                        // Loop to receive all the data sent by the client.
-                        if (stream.DataAvailable)
-                        {
-                            byte[] data;
-                            int offset;
-                            int size;
-                            bool isWriteBufferWait = false;
-                            while (!this._receiveBuffer.GetWriteData(out data, out offset, out size))
-                            {
-                                if (!isWriteBufferWait)
-                                {
-                                    isWriteBufferWait = true;
-
-                                    _logger.Error("TCP server socket is out of writable buffer space.");
-                                }
-                                // Wait for write queue to become available.
-                                Thread.Sleep(1);
-                            }
-
-                            int readCount = stream.Read(data, offset, size);
-
-                            bool isReadSuccess = true;
-
-                            if (readCount > size)
-                            {
-                                isReadSuccess = false;
-
-                                this._logger.Error($"Received TCP packet exceeded buffer size: bufferSize={size}");
-
-                                break;
-                            }
-
-                            if (isReadSuccess)
-                            {
-                                this._receiveBuffer.NextWrite(readCount, client);
-                            }
-                        }
-                    }
-                }
-                finally
-                {
-                    this._tcpClients.Unlock();
-                }
-            }
+            _listener.Stop();
         }
-#endif
+
         private void AcceptClient(IAsyncResult ar)
         {
             if (!_isRunning)
@@ -152,16 +92,6 @@
             listener.BeginAcceptTcpClient(AcceptClient, listener);
         }
 
-        public void Stop()
-        {
-            this._isRunning = false;
-
-            // Wait a short period to ensure the cancellation flag has propagated. 
-            Thread.Sleep(100);
-
-            _listener.Stop();
-        }
-
         private void AcceptRead(IAsyncResult ar)
         {
             if (!_isRunning)
@@ -181,7 +111,6 @@
             clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
             stream.BeginRead(data, offset, size, AcceptRead, clientData);
         }
-
 
         public class TcpClientsEventArgs : EventArgs
         {

@@ -7,7 +7,7 @@ namespace CodeTestsConsole
 {
     public static class TcpTests
     {
-        public static void ClientServerSendReceive()
+        public static void TcpClientServerSendReceive()
         {
             var logger = new ConsoleLogger();
             var serverBuffer = new TcpReceiveBuffer(maxPacketSize: 256, packetQueueCapacity: 4);
@@ -25,7 +25,7 @@ namespace CodeTestsConsole
             var thread = new Thread(serverProcessor.Run);
             thread.Start();
 
-            const int ClientCount = 50;
+            const int ClientCount = 1;
 
             var clients = new TcpSocketClient[ClientCount];
 
@@ -44,7 +44,7 @@ namespace CodeTestsConsole
 
             byte[] sendData = new byte[256];
 
-            const int RoundTripCount = 10000;
+            const int RoundTripCount = 100000;
 
             logger.Info($"Executing {RoundTripCount:N0} send/receive requests.");
 

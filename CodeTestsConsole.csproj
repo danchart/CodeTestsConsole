@@ -53,6 +53,7 @@
     <Compile Include="Helpers\ConsoleStopWatch.cs" />
     <Compile Include="Helpers\LoggerStopWatch.cs" />
     <Compile Include="Helpers\TypeStuff.cs" />
+    <Compile Include="HttpTests.cs" />
     <Compile Include="InterfaceTests.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

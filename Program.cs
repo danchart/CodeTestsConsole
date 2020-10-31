@@ -11,7 +11,8 @@ namespace CodeTestsConsole
                 //ArrayTests.CopyArray,
                 EnumerableTests.TestEnumerableVsIEnumerable,
                 InterfaceTests.MethodCall,
-                TcpTests.ClientServerSendReceive
+                TcpTests.TcpClientServerSendReceive,
+                HttpTests.HttpClientServerSendReceive,
             };
 
         static void Main(string[] args)

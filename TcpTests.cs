@@ -1,5 +1,6 @@
 ﻿//#define PRINT_DATA
 
+using MessagePack;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -44,15 +45,22 @@ namespace CodeTestsConsole
             }
 
             var serializer = new Serializer();
-            var sendStr = $"Client Message: {new string('c', 128)}";
+            //var sendStr = $"Client Message: {new string('c', 128)}";
 
             // Send requests from clients to server.
 
-            byte[] sendData = new byte[256];
+            //byte[] sendData = new byte[256];
 
             const int TestRequestCount = 10000;
 
             Logger.Info($"Executing {TestRequestCount:N0} send/receive requests for {ClientCount} clients.");
+
+            var msgPackData = new SampleDataMsgPack
+            {
+                MyNumber = 123,
+                MyFloat = 456.0f,
+                MyString = "abcdefghijklmnopqrstuvwxyz.",
+            };
 
             using (var sw = new LoggerStopWatch(Logger))
             {
@@ -62,9 +70,12 @@ namespace CodeTestsConsole
                     {
                         var client = clients[j];
 
-                        serializer.Serialize(sendStr, sendData, out int sendDataCount);
+                        //serializer.Serialize(sendStr, sendData, out int sendDataCount);
+                        //client.Send(sendData, 0, sendDataCount);
 
-                        client.Send(sendData, 0, sendDataCount);
+                        var sendData = MessagePackSerializer.Serialize(msgPackData);
+
+                        client.Send(sendData, 0, (ushort) sendData.Length);
 
                         byte[] recvData = new byte[12000];
 
@@ -223,6 +234,19 @@ namespace CodeTestsConsole
 
                 return offset + byteCount;
             }
+        }
+
+        [MessagePackObject]
+        private class SampleDataMsgPack
+        {
+            [Key(0)]
+            public int MyNumber;
+
+            [Key(1)]
+            public float MyFloat;
+
+            [Key(2)]
+            public string MyString;
         }
     }
 }

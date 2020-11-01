@@ -84,7 +84,7 @@ namespace CodeTestsConsole
 
                     //serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
 #if PRINT_DATA
-                        Logger.Info($"Client {j} Receive: {receivedObj}");
+                        Logger.Info($"Client {clientIndex} Receive: {receivedObj}");
 #endif //PRINT_DATA
 
 #if MOTHBALL

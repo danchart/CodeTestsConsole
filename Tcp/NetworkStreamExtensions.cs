@@ -13,14 +13,17 @@ namespace Networking.Core
         {
             var sizePreambleBytes = BitConverter.GetBytes((ushort)count);
 
-            var writeData = new byte[count + 2];
+            stream.Write(sizePreambleBytes, 0, sizePreambleBytes.Length);
+            stream.Write(data, 0, count);
 
-            writeData[0] = sizePreambleBytes[0];
-            writeData[1] = sizePreambleBytes[1];
+            //var writeData = new byte[count + 2];
 
-            Array.Copy(data, offset, writeData, 2, count);
+            //writeData[0] = sizePreambleBytes[0];
+            //writeData[1] = sizePreambleBytes[1];
 
-            stream.Write(writeData, 0, count + 2);
+            //Array.Copy(data, offset, writeData, 2, count);
+
+            //stream.Write(writeData, 0, count + 2);
         }
 
         public static void ReadWithSizePreamble(

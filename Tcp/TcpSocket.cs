@@ -9,6 +9,8 @@
 
     public sealed class TcpSocketListener
     {
+        public const int FrameSizeByteCount = sizeof(ushort);
+
         public readonly TcpClients Clients;
 
         private bool _isRunning;
@@ -16,7 +18,8 @@
         private TcpListener _listener;
 
         private byte[] _acceptReadBuffer;
-        private int _acceptReadPos;
+        private int _acceptReadBufferSize;
+        private int _messageSize;
 
         private readonly ILogger _logger;
 
@@ -34,7 +37,8 @@
             this.PacketQueueCapacity = packetQueueCapacity;
 
             this._acceptReadBuffer = new byte[MaxPacketSize];
-            this._acceptReadPos = 0;
+            this._acceptReadBufferSize = 0;
+            this._messageSize = 0;
         }
 
         public bool IsRunning => this._isRunning;
@@ -91,9 +95,6 @@
             };
             this.Clients.Add(clientData);
 
-            //buffer.GetWriteData(out byte[] data, out int offset, out int size);
-            //stream.BeginRead(data, offset, size, AcceptRead, clientData);
-
             stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
 
             this._logger.Info($"Connected. RemoteEp={client.Client.RemoteEndPoint}");
@@ -114,42 +115,53 @@
             NetworkStream stream = clientData.Stream;
 
             int bytesRead = stream.EndRead(ar);
+            this._acceptReadBufferSize += bytesRead;
 
-
-            _acceptReadPos
-
-
-            // Seperate stream into packets before adding to the receive buffer.
-
-            int pos = 0;
-            while (pos < bytesRead)
+            while (this._acceptReadBufferSize > FrameSizeByteCount - 1) // at least 2 bytes for frame size preamble
             {
-                var packetSize = BitConverter.ToUInt16(this._acceptReadBuffer, pos);
-
-                if (packetSize > bytesRead - 2)
+                if (this._messageSize == 0)
                 {
-                    throw new InvalidOperationException($"Invalid packet received: packetSize={packetSize}, bytesRead={bytesRead}");
+                    // Starting new message, get message size in bytes.
+
+                    // First two bytes of the buffer is always the message size
+                    this._messageSize = BitConverter.ToUInt16(this._acceptReadBuffer, 0);
                 }
 
-                clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+                if (FrameSizeByteCount + this._messageSize <= this._acceptReadBufferSize)
+                {
+                    // Complete message data available.
 
-                Array.Copy(this._acceptReadBuffer, pos + 2, data, 0, packetSize);
+                    clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
 
-                pos += 2;
-                pos += packetSize;
+                    // Copy data minus frame preamble
+                    Array.Copy(this._acceptReadBuffer, FrameSizeByteCount, data, offset, this._messageSize);
 
-                clientData.ReceiveBuffer.NextWrite(packetSize, clientData.Client);
+                    clientData.ReceiveBuffer.NextWrite(this._messageSize, clientData.Client);
+
+                    // Shift accept read buffer to the next frame, if any.
+                    for (int i = FrameSizeByteCount + this._messageSize, j = 0; i < this._acceptReadBufferSize; i++, j++)
+                    {
+                        this._acceptReadBuffer[j] = this._acceptReadBuffer[i];
+                    }
+
+                    this._acceptReadBufferSize -= this._messageSize + FrameSizeByteCount;
+                    this._messageSize = 0;
+                }
+                else
+                {
+                    // Message still being streamed.
+
+                    break;
+                }
             }
 
-            //clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
-
-            //clientData.ReceiveBuffer.NextWrite(bytesRead, clientData.Client);
-
             // Begin waiting for more stream data.
-            stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
-
-            //clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
-            //stream.BeginRead(data, offset, size, AcceptRead, clientData);
+            stream.BeginRead(
+                this._acceptReadBuffer, 
+                this._acceptReadBufferSize, 
+                this._acceptReadBuffer.Length - this._acceptReadBufferSize, 
+                AcceptRead, 
+                clientData);
         }
 
         public class TcpClientsEventArgs : EventArgs
@@ -358,22 +370,22 @@
 
             int index = GetNextReadBufferIndex();
 
-            _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, index);
+//            _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, index);
         }
 
-        private void AcceptRead(IAsyncResult ar)
-        {
-            var index = (int)ar.AsyncState;
+        //private void AcceptRead(IAsyncResult ar)
+        //{
+        //    var index = (int)ar.AsyncState;
 
-            var bytesRead = _stream.EndRead(ar);
+        //    var bytesRead = _stream.EndRead(ar);
 
-            if ()
+        //    if ()
 
-            // Queue next read.
-            int index = GetNextReadBufferIndex();
-            _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, _stream);
+        //    // Queue next read.
+        //    int index = GetNextReadBufferIndex();
+        //    _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, _stream);
 
-        }
+        //}
 
         public void Disconnect()
         {
@@ -381,15 +393,15 @@
             _client.Close();
         }
 
-        public async Task<TcpPacket> SendAsync(
-            byte[] data,
-            int offset,
-            ushort count)
-        {
-            Send(data, offset, count);
+        //public async Task<TcpPacket> SendAsync(
+        //    byte[] data,
+        //    int offset,
+        //    ushort count)
+        //{
+        //    Send(data, offset, count);
 
 
-        }
+        //}
 
         public void Send(
             byte[] data,

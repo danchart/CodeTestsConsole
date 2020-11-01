@@ -16,6 +16,7 @@
         private TcpListener _listener;
 
         private byte[] _acceptReadBuffer;
+        private int _acceptReadPos;
 
         private readonly ILogger _logger;
 
@@ -33,6 +34,7 @@
             this.PacketQueueCapacity = packetQueueCapacity;
 
             this._acceptReadBuffer = new byte[MaxPacketSize];
+            this._acceptReadPos = 0;
         }
 
         public bool IsRunning => this._isRunning;
@@ -109,9 +111,13 @@
             }
 
             TcpClientData clientData = (TcpClientData)ar.AsyncState;
-            NetworkStream stream = clientData.Stream; ;
+            NetworkStream stream = clientData.Stream;
 
             int bytesRead = stream.EndRead(ar);
+
+
+            _acceptReadPos
+
 
             // Seperate stream into packets before adding to the receive buffer.
 

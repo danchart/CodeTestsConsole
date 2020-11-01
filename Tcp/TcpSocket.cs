@@ -5,6 +5,7 @@
     using System.Net;
     using System.Net.Sockets;
     using System.Threading;
+    using System.Threading.Tasks;
 
     public sealed class TcpSocketListener
     {
@@ -320,21 +321,68 @@
         private TcpClient _client;
         private NetworkStream _stream;
 
+        private byte[][] _readBuffers;
+        private int _count;
+
+        private int[] _freeIndices;
+        private int _freeCount;
+
+        private TaskCompletionSource<byte[]> _tcsBufferComplete;
+
         public TcpSocketClient(ILogger logger)
         {
             _client = new TcpClient();
+
+            const int QueueDepth = 32;
+            const int BufferSize = 16192;
+
+            _readBuffers = new byte[QueueDepth][];
+            _freeIndices = new int[QueueDepth];
+
+            for (int i  = 0; i< _readBuffers.Length; i++)
+            {
+                _readBuffers[i] = new byte[BufferSize];
+            }
         }
 
         public void Connect(string server, int port)
         {
             _client.Connect(server, port);
             _stream = _client.GetStream();
+
+            int index = GetNextReadBufferIndex();
+
+            _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, index);
+        }
+
+        private void AcceptRead(IAsyncResult ar)
+        {
+            var index = (int)ar.AsyncState;
+
+            var bytesRead = _stream.EndRead(ar);
+
+            if ()
+
+            // Queue next read.
+            int index = GetNextReadBufferIndex();
+            _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, _stream);
+
         }
 
         public void Disconnect()
         {
             _stream.Close();
             _client.Close();
+        }
+
+        public async Task<TcpPacket> SendAsync(
+            byte[] data,
+            int offset,
+            ushort count)
+        {
+            Send(data, offset, count);
+
+
         }
 
         public void Send(
@@ -353,5 +401,31 @@
         {
             _stream.ReadWithSizePreamble(receiveData, receiveOffset, receiveSize, out receivedBytes);
         }
+
+        private int GetNextReadBufferIndex()
+        {
+            int index;
+            if (_freeCount > 0)
+            {
+                index = _freeIndices[--_freeCount];
+            }
+            else
+            {
+                if (_count == _readBuffers.Length)
+                {
+                    throw new InvalidOperationException("TcpSocketClient: Out of receive buffer space.");
+                }
+
+                index = _count++;
+            }
+
+            return index;
+        }
+    }
+
+    public class TcpPacket
+    {
+        public byte[] Data;
+        public int Size;
     }
 }

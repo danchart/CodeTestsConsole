@@ -59,20 +59,20 @@ namespace CodeTestsConsole
 
             Logger.Info($"Executing {TestRequestCount:N0} send/receive requests for {ClientCount} clients.");
 
-            var msgPackData = new SampleDataMsgPack
-            {
-                ClientId = 123,
-                MyFloat = 456.0f,
-                MyString = "abcdefghijklmnopqrstuvwxyz.",
-            };
-
             using (var sw = new LoggerStopWatch(Logger))
             {
                 for (int i = 0; i < TestRequestCount; i++)
                 {
-                    var client = clients[Random.Next() % clients.Length];
+                    var clientIndex = Random.Next() % clients.Length;
+                    var client = clients[clientIndex];
 
-                    var sendData = MessagePackSerializer.Serialize(msgPackData);
+                    var sendData = MessagePackSerializer.Serialize(
+                        new SampleDataMsgPack
+                        {
+                            ClientId = clientIndex,
+                            MyFloat = 456.0f,
+                            MyString = "abcdefghijklmnopqrstuvwxyz.",
+                        });
 
                     client.Send(sendData, 0, (ushort)sendData.Length);
 

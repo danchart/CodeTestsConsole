@@ -4,9 +4,9 @@
 
     public class TcpReceiveBuffer
     {
-        public delegate void OnReadCompleteAction();
+        public delegate bool OnBeforeWriteCompleteAction(byte[] data, int offset, int size, TcpClient client, ushort transactionId);
 
-        public OnReadCompleteAction OnWriteComplete;
+        public OnBeforeWriteCompleteAction OnWriteComplete;
 
         public readonly int MaxPacketSize;
         public readonly int PacketCapacity;
@@ -85,13 +85,20 @@
         {
             var writeIndex = GetWriteIndex();
 
+            if (OnWriteComplete != null) 
+            {
+                if (OnWriteComplete(this._data, writeIndex * this.MaxPacketSize, bytesReceived, tcpClient, transactionId))
+                {
+                    // Write processed by callback, don't update head position.
+                    return;
+                }
+            }
+
             this._bytedReceived[writeIndex] = bytesReceived;
             this._states[writeIndex].Client = tcpClient;
             this._states[writeIndex].TransactionId = transactionId;
 
             this._unwrappedHeadIndex = (this._unwrappedHeadIndex + 1) % (2 * this.PacketCapacity);
-
-            OnWriteComplete?.Invoke();
         }
 
         public bool GetState(out TcpClient client, out ushort transactionId)

@@ -75,13 +75,19 @@ namespace CodeTestsConsole
                     var clientIndex = Random.Next() % clients.Length;
                     var client = clients[clientIndex];
 
-                    var sendData = MessagePackSerializer.Serialize(
-                        new SampleDataMsgPack
-                        {
-                            ClientId = clientIndex,
-                            MyFloat = 456.0f,
-                            MyString = "abcdefghijklmnopqrstuvwxyz.",
-                        });
+                    var sendMessage = new SampleDataMsgPack
+                    {
+                        ClientId = clientIndex,
+                        MyInt = i,
+                        TransactionId = 1337,
+                        MyString = "abcdefghijklmnopqrstuvwxyz.",
+                    };
+
+                    var sendData = MessagePackSerializer.Serialize(sendMessage);
+
+#if PRINT_DATA
+                    Logger.Info($"Client {clientIndex} Sending: {sendMessage}");
+#endif //PRINT_DATA
 
                     //var tcpPacket = await client.SendAsync(sendData, 0, (ushort)sendData.Length);
 
@@ -113,9 +119,13 @@ namespace CodeTestsConsole
 
                         foreach (var task in tasks)
                         {
-                            var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(task.Result.Data);
+                            var receivedMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(
+                                new ReadOnlyMemory<byte>(
+                                    task.Result.Data, 
+                                    task.Result.Offset, 
+                                    task.Result.Size));
 #if PRINT_DATA
-                            Logger.Info($"Client {receivedObj.ClientId} Receive: {receivedObj}");
+                            Logger.Info($"Client {receivedMessage.ClientId} Receive: {receivedMessage}");
 #endif //PRINT_DATA
                         }
 
@@ -240,7 +250,7 @@ namespace CodeTestsConsole
                         {
                             if (buffer.GetReadData(out byte[] data, out int offset, out int count))
                             {
-                                var receivedMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(data);
+                                var receivedMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(new ReadOnlyMemory<byte>(data, offset, count));
 
                                 if (!ClientCounts.ContainsKey(receivedMessage.ClientId))
                                 {
@@ -249,25 +259,31 @@ namespace CodeTestsConsole
 
                                 ClientCounts[receivedMessage.ClientId] = ClientCounts[receivedMessage.ClientId] + 1;
 
-#if PRINT_DATA
-                        _logger.Info($"Server received: {dataObj}");
-#endif //PRINT_DATA
-
                                 buffer.GetState(out TcpClient remoteClient, out ushort transactionId);
 
                                 buffer.NextRead(closeConnection: false);
 
+
+                                receivedMessage.TransactionId = transactionId;
+
+#if PRINT_DATA
+                                _logger.Info($"Server received: {receivedMessage}");
+#endif //PRINT_DATA
+
+
                                 var stream = remoteClient.GetStream();
 
-                                var sendMessage = MessagePackSerializer.Serialize(
-                                    new SampleDataMsgPack
-                                    {
-                                        ClientId = receivedMessage.ClientId,
-                                        MyFloat = 654,
-                                        MyString = "The quick brown fox jumped over the lazy dogs.",
-                                    });
+                                var sendMessage = new SampleDataMsgPack
+                                {
+                                    ClientId = receivedMessage.ClientId,
+                                    TransactionId = transactionId,
+                                    MyInt = receivedMessage.MyInt,
+                                    MyString = "The quick brown fox jumped over the lazy dogs.",
+                                };
 
-                                stream.WriteFrame(transactionId: transactionId, data: sendMessage, offset: 0, count: (ushort)sendMessage.Length);
+                                var sendMessageBytes = MessagePackSerializer.Serialize(sendMessage);
+
+                                stream.WriteFrame(transactionId: transactionId, data: sendMessageBytes, offset: 0, count: (ushort)sendMessageBytes.Length);
                             }
                         }
                     }
@@ -304,14 +320,17 @@ namespace CodeTestsConsole
             public int ClientId;
 
             [Key(1)]
-            public float MyFloat;
+            public ushort TransactionId;
 
             [Key(2)]
+            public int MyInt;
+
+            [Key(3)]
             public string MyString;
 
             public override string ToString()
             {
-                return $"ClientId={ClientId}, MyFloat={MyFloat}, MyString={MyString}";
+                return $"ClientId={ClientId}, TransactionId={TransactionId}, MyInt={MyInt}, MyString={MyString}";
             }
         }
     }

@@ -269,37 +269,40 @@
 
     internal sealed class TcpReceive
     {
-        public bool IsClient = false;
-
         public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // size + transaction id
 
         private bool _isRunning;
 
-        private byte[] _acceptReadBuffer;
-        private int _acceptReadBufferSize;
-        private int _messageSize;
-        private ushort _transactionId;
+        private readonly int MaxPacketSize;
 
 
-
-
-
-        private static bool _inAccept = false;
+        public bool IsClient = false;
 
 
 
         public TcpReceive(int maxPacketSize)
         {
-            this._acceptReadBuffer = new byte[maxPacketSize];
-            this._acceptReadBufferSize = 0;
-            this._messageSize = 0;
+            this.MaxPacketSize = maxPacketSize;
         }
 
         public void Start(NetworkStream stream, TcpClientData clientData)
         {
             this._isRunning = true;
 
-            stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
+            var receiverData = new ReceiverData
+            {
+                ClientData = clientData,
+                _acceptReadBuffer = new byte[this.MaxPacketSize],
+                _acceptReadBufferSize = 0,
+                _messageSize = 0,
+            };
+
+            stream.BeginRead(
+                receiverData._acceptReadBuffer, 
+                0, 
+                receiverData._acceptReadBuffer.Length, 
+                AcceptRead, 
+                receiverData);
         }
 
         public void Stop()
@@ -315,52 +318,44 @@
                 return;
             }
 
+            ReceiverData receiverData = (ReceiverData)ar.AsyncState;
 
-
-
-            if (_inAccept) throw new InvalidOperationException();
-
-            _inAccept = true;
-
-
-
-            TcpClientData clientData = (TcpClientData)ar.AsyncState;
-            NetworkStream stream = clientData.Stream;
+            NetworkStream stream = receiverData.ClientData.Stream;
 
             int bytesRead = stream.EndRead(ar);
-            this._acceptReadBufferSize += bytesRead;
+            receiverData._acceptReadBufferSize += bytesRead;
 
             // We need at least the frame header data to do anything.
-            while (this._acceptReadBufferSize > FrameHeaderSizeByteCount - 1) 
+            while (receiverData._acceptReadBufferSize > FrameHeaderSizeByteCount - 1) 
             {
-                if (this._messageSize == 0)
+                if (receiverData._messageSize == 0)
                 {
                     // Starting new message, get message size in bytes.
 
                     // First two bytes of the buffer is always the message size
-                    this._messageSize = BitConverter.ToUInt16(this._acceptReadBuffer, 0);
-                    this._transactionId = BitConverter.ToUInt16(this._acceptReadBuffer, 2);
+                    receiverData._messageSize = BitConverter.ToUInt16(receiverData._acceptReadBuffer, 0);
+                    receiverData._transactionId = BitConverter.ToUInt16(receiverData._acceptReadBuffer, 2);
                 }
 
-                if (FrameHeaderSizeByteCount + this._messageSize <= this._acceptReadBufferSize)
+                if (FrameHeaderSizeByteCount + receiverData._messageSize <= receiverData._acceptReadBufferSize)
                 {
                     // Complete message data available.
 
-                    clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+                    receiverData.ClientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
 
                     // Copy data minus frame preamble
-                    Array.Copy(this._acceptReadBuffer, FrameHeaderSizeByteCount, data, offset, this._messageSize);
+                    Array.Copy(receiverData._acceptReadBuffer, FrameHeaderSizeByteCount, data, offset, receiverData._messageSize);
 
-                    clientData.ReceiveBuffer.NextWrite(this._messageSize, clientData.Client, this._transactionId);
+                    receiverData.ClientData.ReceiveBuffer.NextWrite(receiverData._messageSize, receiverData.ClientData.Client, receiverData._transactionId);
 
                     // Shift accept read buffer to the next frame, if any.
-                    for (int i = FrameHeaderSizeByteCount + this._messageSize, j = 0; i < this._acceptReadBufferSize; i++, j++)
+                    for (int i = FrameHeaderSizeByteCount + receiverData._messageSize, j = 0; i < receiverData._acceptReadBufferSize; i++, j++)
                     {
-                        this._acceptReadBuffer[j] = this._acceptReadBuffer[i];
+                        receiverData._acceptReadBuffer[j] = receiverData._acceptReadBuffer[i];
                     }
 
-                    this._acceptReadBufferSize -= this._messageSize + FrameHeaderSizeByteCount;
-                    this._messageSize = 0;
+                    receiverData._acceptReadBufferSize -= receiverData._messageSize + FrameHeaderSizeByteCount;
+                    receiverData._messageSize = 0;
                 }
                 else
                 {
@@ -370,22 +365,23 @@
                 }
             }
 
-
-
-
-
-
-            _inAccept = false;
-
-
-
             // Begin waiting for more stream data.
             stream.BeginRead(
-                this._acceptReadBuffer,
-                this._acceptReadBufferSize,
-                this._acceptReadBuffer.Length - this._acceptReadBufferSize,
+                receiverData._acceptReadBuffer,
+                receiverData._acceptReadBufferSize,
+                receiverData._acceptReadBuffer.Length - receiverData._acceptReadBufferSize,
                 AcceptRead,
-                clientData);
+                receiverData);
+        }
+
+        private class ReceiverData
+        {
+            public TcpClientData ClientData;
+
+            public byte[] _acceptReadBuffer;
+            public int _acceptReadBufferSize;
+            public int _messageSize;
+            public ushort _transactionId;
         }
     }
 
@@ -399,8 +395,8 @@
 
         private ushort _nextTransactionId = 0;
 
-        private object _lock = new object();
-        private SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(1);
+        private object _stateLock = new object();
+        private object _streamWriteLock = new object();
 
         private SendAndReceiveState[] _sendAndReceiveStates = new SendAndReceiveState[16];
         private int _sendAndReceiveStateCount = 0;
@@ -417,6 +413,13 @@
             this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
             this._tcpReceiver = new TcpReceive(maxPacketSize);
 
+
+
+            this._tcpReceiver.IsClient = true;
+
+
+
+
             this._receiveBuffer.OnWriteComplete = this.OnWriteComplete;
         }
 
@@ -424,9 +427,6 @@
         {
             _client.Connect(server, port);
             _stream = _client.GetStream();
-
-
-            this._tcpReceiver.IsClient = true;
 
             this._tcpReceiver.Start(
                 this._stream, 
@@ -452,7 +452,7 @@
             int index;
             ushort transactionId;
 
-            lock (_lock)
+            lock (_stateLock)
             {
                 if (this._freeSendAndReceiveStateCount > 0)
                 {
@@ -489,7 +489,7 @@
             int offset,
             ushort count)
         {
-            lock (_lock)
+            lock (_streamWriteLock)
             {
                 _stream.WriteFrame(transactionId, data, offset, count);
             }
@@ -517,7 +517,7 @@
 
         private void OnWriteComplete()
         {
-            lock (_lock)
+            lock (_stateLock)
             {
                 if (this._receiveBuffer.Count > 0)
                 {

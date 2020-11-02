@@ -1,4 +1,7 @@
-﻿using System;
+﻿//#define PRINT_DATA
+
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -26,7 +29,7 @@ namespace CodeTestsConsole
 
         private static async Task WorkerAsync(string endpoint, ILogger logger)
         {
-            const int RoundTripCount = 10000;
+            const int RoundTripCount = 100000;
 
             logger.Info($"Executing {RoundTripCount:N0} send/receive requests.");
 
@@ -34,12 +37,42 @@ namespace CodeTestsConsole
             {
                 using (var sw = new LoggerStopWatch(logger))
                 {
+                    var tasks = new List<Task<HttpResponseMessage>>();
+
                     for (int i = 0; i < RoundTripCount; i++)
                     {
-                        var response = await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Post, endpoint)
+                        tasks.Add(httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Post, endpoint)
                         {
-                            Content = new StringContent("Hello, world")
-                        });
+                            Content = new StringContent("Hello, world!")
+                        }));
+
+                        if (tasks.Count == 10)
+                        {
+                            var taskSendAll = Task.WhenAll(tasks);
+
+                            await Task.WhenAny(
+                                taskSendAll,
+                                Task.Delay(250));
+
+                            if (!taskSendAll.IsCompleted)
+                            {
+                                logger.Error($"Failed to complete all sends.");
+
+                                tasks.Clear();
+
+                                continue;
+                            }
+
+                            foreach (var task in tasks)
+                            {
+                                var response = task.Result;
+#if PRINT_DATA
+                            logger.Info($"Client Received: {response.Content.ReadAsStringAsync().Result}");
+#endif //PRINT_DATA
+                            }
+
+                            tasks.Clear();
+                        }
 
                         //logger.Info($"Received {response.Content.ReadAsStringAsync().Result}");
                     }
@@ -74,12 +107,27 @@ namespace CodeTestsConsole
                 _listener.BeginGetContext(new AsyncCallback(ListenerCallback), _listener);
             }
 
-            public static void ListenerCallback(IAsyncResult result)
+            public void ListenerCallback(IAsyncResult result)
             {
                 HttpListener listener = (HttpListener)result.AsyncState;
                 // Call EndGetContext to complete the asynchronous operation.
                 HttpListenerContext context = listener.EndGetContext(result);
                 HttpListenerRequest request = context.Request;
+
+                if (request.HasEntityBody)
+                {
+                    using (Stream body = request.InputStream) // here we have data
+                    {
+                        using (StreamReader reader = new StreamReader(body, request.ContentEncoding))
+                        {
+                            var text = reader.ReadToEnd();
+#if PRINT_DATA
+                            _logger.Info($"Server Received: {text}");
+#endif //PRINT_DATA
+                        }
+                    }
+                }
+
                 // Obtain a response object.
                 HttpListenerResponse response = context.Response;
 

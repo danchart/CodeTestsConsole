@@ -1,4 +1,4 @@
-﻿#define PRINT_DATA
+﻿//#define PRINT_DATA
 
 using MessagePack;
 using Networking.Core;
@@ -27,11 +27,16 @@ namespace CodeTestsConsole
 
         private static async Task RunAsync()
         {
+            // Testing constants:
+
+            const int MaxPacketSize = 256;
+            const int PacketQueueCapacity = 16;
+
             // Start TCP server.
 
             var serverEndpoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 27005);
 
-            var server = new TcpSocketListener(Logger, clientCapacity: 2, maxPacketSize: 256, packetQueueCapacity: 4);
+            var server = new TcpSocketListener(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
             server.Start(serverEndpoint);
 
             Processor = new ServerProcessor(Logger, capacity: 2);
@@ -50,19 +55,20 @@ namespace CodeTestsConsole
 
             for (int i= 0; i < clients.Length; i++)
             {
-                clients[i] = new TcpSocketClient(Logger, maxPacketSize: 256, packetQueueCapacity: 4);
+                clients[i] = new TcpSocketClient(Logger, maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
                 clients[i].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
             }
 
             // Send requests from clients to server.
 
-            const int TestRequestCount = 10;
+            const int TestRequestCount = 100000;
 
             Logger.Info($"Executing {TestRequestCount:N0} send/receive requests for {ClientCount} clients.");
 
             using (var sw = new LoggerStopWatch(Logger))
             {
                 var tasks = new List<Task<TcpPacket>>();
+                var clientIndices = new List<int>();
 
                 for (int i = 0; i < TestRequestCount; i++)
                 {
@@ -83,20 +89,40 @@ namespace CodeTestsConsole
 
 
                     tasks.Add(client.SendAsync(sendData, 0, (ushort)sendData.Length));
+                    clientIndices.Add(clientIndex);
 
                     if (tasks.Count == 10)
                     {
-                        await Task.WhenAll(tasks);
+                        //Logger.Info($"Before {i} frames.");
+
+                        var taskSendAll = Task.WhenAll(tasks);
+
+                        await Task.WhenAny(
+                            taskSendAll,
+                            Task.Delay(250));
+
+                        if (!taskSendAll.IsCompleted)
+                        {
+                            Logger.Error($"Failed to complete all sends.");
+
+                            tasks.Clear();
+                            clientIndices.Clear();
+
+                            continue;
+                        }
 
                         foreach (var task in tasks)
                         {
                             var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(task.Result.Data);
 #if PRINT_DATA
-                            Logger.Info($"Client {clientIndex} Receive: {receivedObj}");
+                            Logger.Info($"Client {receivedObj.ClientId} Receive: {receivedObj}");
 #endif //PRINT_DATA
                         }
 
                         tasks.Clear();
+                        clientIndices.Clear();
+
+                        //Logger.Info($"After {i} frames.");
                     }
 
 #if PRINT_DATA
@@ -175,8 +201,6 @@ namespace CodeTestsConsole
             private readonly List<TcpReceiveBuffer> Buffers;
             private readonly ILogger _logger;
 
-            private TcpClient _remoteClient;
-
             private static object _lock = new object();
 
             public ServerProcessor(ILogger logger, int capacity)
@@ -216,39 +240,34 @@ namespace CodeTestsConsole
                         {
                             if (buffer.GetReadData(out byte[] data, out int offset, out int count))
                             {
-                                //serializer.Deserialize(data, 0, count, out string recvText);
+                                var receivedMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(data);
 
-                                var dataObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(data);
-
-                                if (!ClientCounts.ContainsKey(dataObj.ClientId))
+                                if (!ClientCounts.ContainsKey(receivedMessage.ClientId))
                                 {
-                                    ClientCounts[dataObj.ClientId] = 0;
+                                    ClientCounts[receivedMessage.ClientId] = 0;
                                 }
 
-                                ClientCounts[dataObj.ClientId] = ClientCounts[dataObj.ClientId] + 1;
+                                ClientCounts[receivedMessage.ClientId] = ClientCounts[receivedMessage.ClientId] + 1;
 
 #if PRINT_DATA
                         _logger.Info($"Server received: {dataObj}");
 #endif //PRINT_DATA
 
-                                buffer.GetState(out _remoteClient, out ushort transactionId);
+                                buffer.GetState(out TcpClient remoteClient, out ushort transactionId);
 
                                 buffer.NextRead(closeConnection: false);
 
-                                var stream = _remoteClient.GetStream();
+                                var stream = remoteClient.GetStream();
 
-                                //var writeData = new byte[256];
+                                var sendMessage = MessagePackSerializer.Serialize(
+                                    new SampleDataMsgPack
+                                    {
+                                        ClientId = receivedMessage.ClientId,
+                                        MyFloat = 654,
+                                        MyString = "The quick brown fox jumped over the lazy dogs.",
+                                    });
 
-                                //serializer.Serialize(sendStr, writeData, out int writeCount);
-
-                                var writeData = MessagePackSerializer.Serialize(new SampleDataMsgPack
-                                {
-                                    ClientId = dataObj.ClientId,
-                                    MyFloat = 654,
-                                    MyString = "The quick brown fox jumped over the lazy dogs.",
-                                });
-
-                                stream.WriteFrame(transactionId: transactionId, data: writeData, offset: 0, count: (ushort)writeData.Length);
+                                stream.WriteFrame(transactionId: transactionId, data: sendMessage, offset: 0, count: (ushort)sendMessage.Length);
                             }
                         }
                     }

@@ -9,17 +9,13 @@
 
     public sealed class TcpSocketListener
     {
-        public const int FrameSizeByteCount = sizeof(ushort);
-
         public readonly TcpClients Clients;
 
         private bool _isRunning;
 
         private TcpListener _listener;
 
-        private byte[] _acceptReadBuffer;
-        private int _acceptReadBufferSize;
-        private int _messageSize;
+        private readonly TcpReceive _tcpReceiver;
 
         private readonly ILogger _logger;
 
@@ -32,13 +28,10 @@
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             this.Clients = new TcpClients(clientCapacity);
+            this._tcpReceiver = new TcpReceive(maxPacketSize);
 
             this.MaxPacketSize = maxPacketSize;
             this.PacketQueueCapacity = packetQueueCapacity;
-
-            this._acceptReadBuffer = new byte[MaxPacketSize];
-            this._acceptReadBufferSize = 0;
-            this._messageSize = 0;
         }
 
         public bool IsRunning => this._isRunning;
@@ -95,73 +88,12 @@
             };
             this.Clients.Add(clientData);
 
-            stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
+            this._tcpReceiver.Start(stream, clientData);
 
             this._logger.Info($"Connected. RemoteEp={client.Client.RemoteEndPoint}");
 
             // Begin waiting for the next request.
             listener.BeginAcceptTcpClient(AcceptClient, listener);
-        }
-
-        private void AcceptRead(IAsyncResult ar)
-        {
-            if (!_isRunning)
-            {
-                // Server stopped.
-                return;
-            }
-
-            TcpClientData clientData = (TcpClientData)ar.AsyncState;
-            NetworkStream stream = clientData.Stream;
-
-            int bytesRead = stream.EndRead(ar);
-            this._acceptReadBufferSize += bytesRead;
-
-            while (this._acceptReadBufferSize > FrameSizeByteCount - 1) // at least 2 bytes for frame size preamble
-            {
-                if (this._messageSize == 0)
-                {
-                    // Starting new message, get message size in bytes.
-
-                    // First two bytes of the buffer is always the message size
-                    this._messageSize = BitConverter.ToUInt16(this._acceptReadBuffer, 0);
-                }
-
-                if (FrameSizeByteCount + this._messageSize <= this._acceptReadBufferSize)
-                {
-                    // Complete message data available.
-
-                    clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
-
-                    // Copy data minus frame preamble
-                    Array.Copy(this._acceptReadBuffer, FrameSizeByteCount, data, offset, this._messageSize);
-
-                    clientData.ReceiveBuffer.NextWrite(this._messageSize, clientData.Client);
-
-                    // Shift accept read buffer to the next frame, if any.
-                    for (int i = FrameSizeByteCount + this._messageSize, j = 0; i < this._acceptReadBufferSize; i++, j++)
-                    {
-                        this._acceptReadBuffer[j] = this._acceptReadBuffer[i];
-                    }
-
-                    this._acceptReadBufferSize -= this._messageSize + FrameSizeByteCount;
-                    this._messageSize = 0;
-                }
-                else
-                {
-                    // Message still being streamed.
-
-                    break;
-                }
-            }
-
-            // Begin waiting for more stream data.
-            stream.BeginRead(
-                this._acceptReadBuffer, 
-                this._acceptReadBufferSize, 
-                this._acceptReadBuffer.Length - this._acceptReadBufferSize, 
-                AcceptRead, 
-                clientData);
         }
 
         public class TcpClientsEventArgs : EventArgs
@@ -316,21 +248,114 @@
                 this._count--;
             }
         }
+    }
 
-        public class TcpClientData
+    public sealed class TcpClientData
+    {
+        public TcpClient Client;
+        public NetworkStream Stream;
+        public TcpReceiveBuffer ReceiveBuffer;
+
+        public void ClearAndClose()
         {
-            public TcpClient Client;
-            public NetworkStream Stream;
-            public TcpReceiveBuffer ReceiveBuffer;
+            Stream.Close();
+            Stream = null;
+            Client.Close();
+            Client = null;
+            ReceiveBuffer = null;
+        }
+    }
 
-            public void ClearAndClose()
+    internal sealed class TcpReceive
+    {
+        public bool IsClient = false;
+
+        public const int FrameSizeByteCount = sizeof(ushort);
+
+        private bool _isRunning;
+
+        private byte[] _acceptReadBuffer;
+        private int _acceptReadBufferSize;
+        private int _messageSize;
+
+        public TcpReceive(int maxPacketSize)
+        {
+            this._acceptReadBuffer = new byte[maxPacketSize];
+            this._acceptReadBufferSize = 0;
+            this._messageSize = 0;
+        }
+
+        public void Start(NetworkStream stream, TcpClientData clientData)
+        {
+            this._isRunning = true;
+
+            stream.BeginRead(this._acceptReadBuffer, 0, this._acceptReadBuffer.Length, AcceptRead, clientData);
+        }
+
+        public void Stop()
+        {
+            this._isRunning = false;
+        }
+
+        private void AcceptRead(IAsyncResult ar)
+        {
+            if (!_isRunning)
             {
-                Stream.Close();
-                Stream = null;
-                Client.Close();
-                Client = null;
-                ReceiveBuffer = null;
+                // Server stopped.
+                return;
             }
+
+            TcpClientData clientData = (TcpClientData)ar.AsyncState;
+            NetworkStream stream = clientData.Stream;
+
+            int bytesRead = stream.EndRead(ar);
+            this._acceptReadBufferSize += bytesRead;
+
+            while (this._acceptReadBufferSize > FrameSizeByteCount - 1) // at least 2 bytes for frame size preamble
+            {
+                if (this._messageSize == 0)
+                {
+                    // Starting new message, get message size in bytes.
+
+                    // First two bytes of the buffer is always the message size
+                    this._messageSize = BitConverter.ToUInt16(this._acceptReadBuffer, 0);
+                }
+
+                if (FrameSizeByteCount + this._messageSize <= this._acceptReadBufferSize)
+                {
+                    // Complete message data available.
+
+                    clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+
+                    // Copy data minus frame preamble
+                    Array.Copy(this._acceptReadBuffer, FrameSizeByteCount, data, offset, this._messageSize);
+
+                    clientData.ReceiveBuffer.NextWrite(this._messageSize, clientData.Client);
+
+                    // Shift accept read buffer to the next frame, if any.
+                    for (int i = FrameSizeByteCount + this._messageSize, j = 0; i < this._acceptReadBufferSize; i++, j++)
+                    {
+                        this._acceptReadBuffer[j] = this._acceptReadBuffer[i];
+                    }
+
+                    this._acceptReadBufferSize -= this._messageSize + FrameSizeByteCount;
+                    this._messageSize = 0;
+                }
+                else
+                {
+                    // Message still being streamed.
+
+                    break;
+                }
+            }
+
+            // Begin waiting for more stream data.
+            stream.BeginRead(
+                this._acceptReadBuffer,
+                this._acceptReadBufferSize,
+                this._acceptReadBuffer.Length - this._acceptReadBufferSize,
+                AcceptRead,
+                clientData);
         }
     }
 
@@ -339,28 +364,19 @@
         private TcpClient _client;
         private NetworkStream _stream;
 
-        private byte[][] _readBuffers;
-        private int _count;
+        private readonly TcpReceiveBuffer _receiveBuffer;
+        private readonly TcpReceive _tcpReceiver;
 
-        private int[] _freeIndices;
-        private int _freeCount;
+        private SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(0, 1);
 
-        private TaskCompletionSource<byte[]> _tcsBufferComplete;
-
-        public TcpSocketClient(ILogger logger)
+        public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
-            _client = new TcpClient();
+            this._client = new TcpClient();
 
-            const int QueueDepth = 32;
-            const int BufferSize = 16192;
+            this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
+            this._tcpReceiver = new TcpReceive(maxPacketSize);
 
-            _readBuffers = new byte[QueueDepth][];
-            _freeIndices = new int[QueueDepth];
-
-            for (int i  = 0; i< _readBuffers.Length; i++)
-            {
-                _readBuffers[i] = new byte[BufferSize];
-            }
+            this._receiveBuffer.OnReadComplete = this.OnReadComplete;
         }
 
         public void Connect(string server, int port)
@@ -368,24 +384,18 @@
             _client.Connect(server, port);
             _stream = _client.GetStream();
 
-            int index = GetNextReadBufferIndex();
 
-//            _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, index);
+            this._tcpReceiver.IsClient = true;
+
+            this._tcpReceiver.Start(
+                this._stream, 
+                new TcpClientData
+                {
+                    Client = this._client,
+                    Stream = this._stream,
+                    ReceiveBuffer = this._receiveBuffer,
+                });
         }
-
-        //private void AcceptRead(IAsyncResult ar)
-        //{
-        //    var index = (int)ar.AsyncState;
-
-        //    var bytesRead = _stream.EndRead(ar);
-
-        //    if ()
-
-        //    // Queue next read.
-        //    int index = GetNextReadBufferIndex();
-        //    _stream.BeginRead(_readBuffers[index], 0, _readBuffers[index].Length, AcceptRead, _stream);
-
-        //}
 
         public void Disconnect()
         {
@@ -393,15 +403,48 @@
             _client.Close();
         }
 
-        //public async Task<TcpPacket> SendAsync(
-        //    byte[] data,
-        //    int offset,
-        //    ushort count)
-        //{
-        //    Send(data, offset, count);
+        public Task<TcpPacket> SendAsync(
+            byte[] data,
+            int offset,
+            ushort count)
+        {
+            TaskCompletionSource<TcpPacket> tcs = new TaskCompletionSource<TcpPacket>();
 
+            Task.Factory.StartNew(async () =>
+            {
+                await _semaphoreSlim.WaitAsync();
 
-        //}
+                try
+                {
+                    Send(data, offset, count);
+
+                    byte[] readData;
+                    int readOffset, readReceivedBytes;
+                    while (!this._receiveBuffer.GetReadData(out readData, out readOffset, out readReceivedBytes))
+                    {
+                        // TODO: Move this to an event or delegate
+                        Task.Delay(10);
+                    }
+
+                    var readDataCopy = new byte[readReceivedBytes];
+                    Array.Copy(readData, readOffset, readDataCopy, 0, readReceivedBytes);
+
+                    this._receiveBuffer.NextRead(closeConnection: false);
+
+                    tcs.SetResult(new TcpPacket
+                    {
+                        Data = readDataCopy,
+                        Size = readReceivedBytes
+                    });
+                }
+                finally
+                {
+                    _semaphoreSlim.Release();
+                }
+            });
+
+            return tcs.Task;
+        }
 
         public void Send(
             byte[] data,
@@ -417,27 +460,22 @@
             int receiveSize,
             out int receivedBytes)
         {
-            _stream.ReadWithSizePreamble(receiveData, receiveOffset, receiveSize, out receivedBytes);
+            //_stream.ReadWithSizePreamble(receiveData, receiveOffset, receiveSize, out receivedBytes);
+
+            byte[] data;
+            int offset;
+            while (!this._receiveBuffer.GetReadData(out data, out offset, out receivedBytes))
+            {
+            }
+
+            Array.Copy(data, offset, receiveData, receiveOffset, receivedBytes);
+
+            this._receiveBuffer.NextRead(closeConnection: false);
         }
 
-        private int GetNextReadBufferIndex()
+        private void OnReadComplete()
         {
-            int index;
-            if (_freeCount > 0)
-            {
-                index = _freeIndices[--_freeCount];
-            }
-            else
-            {
-                if (_count == _readBuffers.Length)
-                {
-                    throw new InvalidOperationException("TcpSocketClient: Out of receive buffer space.");
-                }
 
-                index = _count++;
-            }
-
-            return index;
         }
     }
 

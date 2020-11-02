@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace CodeTestsConsole
 {
@@ -20,6 +21,11 @@ namespace CodeTestsConsole
         internal static Random Random = new Random();
 
         public static void TcpClientServerSendReceive()
+        {
+            RunAsync().Wait();
+        }
+
+        private static async Task RunAsync()
         {
             // Start TCP server.
 
@@ -44,7 +50,7 @@ namespace CodeTestsConsole
 
             for (int i= 0; i < clients.Length; i++)
             {
-                clients[i] = new TcpSocketClient(Logger);
+                clients[i] = new TcpSocketClient(Logger, maxPacketSize: 256, packetQueueCapacity: 4);
                 clients[i].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
             }
 
@@ -74,13 +80,17 @@ namespace CodeTestsConsole
                             MyString = "abcdefghijklmnopqrstuvwxyz.",
                         });
 
-                    client.Send(sendData, 0, (ushort)sendData.Length);
+                    //client.Send(sendData, 0, (ushort)sendData.Length);
 
-                    byte[] recvData = new byte[12000];
+                    //byte[] recvData = new byte[12000];
 
-                    client.Read(recvData, 0, recvData.Length, out int receiveBytes);
+                    //client.Read(recvData, 0, recvData.Length, out int receiveBytes);
 
-                    var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(recvData);
+                    //var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(recvData);
+
+                    var tcpPacket = await client.SendAsync(sendData, 0, (ushort)sendData.Length);
+
+                    var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(tcpPacket.Data);
 
                     //serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
 #if PRINT_DATA
@@ -252,7 +262,7 @@ namespace CodeTestsConsole
 
                                 var writeData = MessagePackSerializer.Serialize(new SampleDataMsgPack
                                 {
-                                    ClientId = 321,
+                                    ClientId = dataObj.ClientId,
                                     MyFloat = 654,
                                     MyString = "The quick brown fox jumped over the lazy dogs.",
                                 });

@@ -5,6 +5,10 @@
 
     public class TcpReceiveBuffer
     {
+        public delegate void OnReadCompleteAction();
+
+        public OnReadCompleteAction OnReadComplete;
+
         public readonly int MaxPacketSize;
         public readonly int PacketCapacity;
 
@@ -116,6 +120,8 @@
             this._clients[readIndex] = null; // For GC
 
             Interlocked.Decrement(ref this._count);
+
+            OnReadComplete?.Invoke();
         }
 
         private int GetReadIndex() => ((this._writeQueueIndex - this._count + this.PacketCapacity) % this.PacketCapacity);

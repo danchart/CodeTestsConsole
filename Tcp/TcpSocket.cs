@@ -2,6 +2,7 @@
 {
     using Networking.Core;
     using System;
+    using System.Collections.Generic;
     using System.Net;
     using System.Net.Sockets;
     using System.Threading;
@@ -270,13 +271,22 @@
     {
         public bool IsClient = false;
 
-        public const int FrameSizeByteCount = sizeof(ushort);
+        public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // size + transaction id
 
         private bool _isRunning;
 
         private byte[] _acceptReadBuffer;
         private int _acceptReadBufferSize;
         private int _messageSize;
+        private ushort _transactionId;
+
+
+
+
+
+        private static bool _inAccept = false;
+
+
 
         public TcpReceive(int maxPacketSize)
         {
@@ -305,13 +315,23 @@
                 return;
             }
 
+
+
+
+            if (_inAccept) throw new InvalidOperationException();
+
+            _inAccept = true;
+
+
+
             TcpClientData clientData = (TcpClientData)ar.AsyncState;
             NetworkStream stream = clientData.Stream;
 
             int bytesRead = stream.EndRead(ar);
             this._acceptReadBufferSize += bytesRead;
 
-            while (this._acceptReadBufferSize > FrameSizeByteCount - 1) // at least 2 bytes for frame size preamble
+            // We need at least the frame header data to do anything.
+            while (this._acceptReadBufferSize > FrameHeaderSizeByteCount - 1) 
             {
                 if (this._messageSize == 0)
                 {
@@ -319,26 +339,27 @@
 
                     // First two bytes of the buffer is always the message size
                     this._messageSize = BitConverter.ToUInt16(this._acceptReadBuffer, 0);
+                    this._transactionId = BitConverter.ToUInt16(this._acceptReadBuffer, 2);
                 }
 
-                if (FrameSizeByteCount + this._messageSize <= this._acceptReadBufferSize)
+                if (FrameHeaderSizeByteCount + this._messageSize <= this._acceptReadBufferSize)
                 {
                     // Complete message data available.
 
                     clientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
 
                     // Copy data minus frame preamble
-                    Array.Copy(this._acceptReadBuffer, FrameSizeByteCount, data, offset, this._messageSize);
+                    Array.Copy(this._acceptReadBuffer, FrameHeaderSizeByteCount, data, offset, this._messageSize);
 
-                    clientData.ReceiveBuffer.NextWrite(this._messageSize, clientData.Client);
+                    clientData.ReceiveBuffer.NextWrite(this._messageSize, clientData.Client, this._transactionId);
 
                     // Shift accept read buffer to the next frame, if any.
-                    for (int i = FrameSizeByteCount + this._messageSize, j = 0; i < this._acceptReadBufferSize; i++, j++)
+                    for (int i = FrameHeaderSizeByteCount + this._messageSize, j = 0; i < this._acceptReadBufferSize; i++, j++)
                     {
                         this._acceptReadBuffer[j] = this._acceptReadBuffer[i];
                     }
 
-                    this._acceptReadBufferSize -= this._messageSize + FrameSizeByteCount;
+                    this._acceptReadBufferSize -= this._messageSize + FrameHeaderSizeByteCount;
                     this._messageSize = 0;
                 }
                 else
@@ -348,6 +369,15 @@
                     break;
                 }
             }
+
+
+
+
+
+
+            _inAccept = false;
+
+
 
             // Begin waiting for more stream data.
             stream.BeginRead(
@@ -367,7 +397,18 @@
         private readonly TcpReceiveBuffer _receiveBuffer;
         private readonly TcpReceive _tcpReceiver;
 
+        private ushort _nextTransactionId = 0;
+
+        private object _lock = new object();
         private SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(1);
+
+        private SendAndReceiveState[] _sendAndReceiveStates = new SendAndReceiveState[16];
+        private int _sendAndReceiveStateCount = 0;
+
+        private int[] _freeSendAndReceiveStateIndices = new int[16];
+        private int _freeSendAndReceiveStateCount = 0;
+
+        private Dictionary<int, int> _transactionIdToStateIndex = new Dictionary<int, int>(16);
 
         public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
@@ -376,7 +417,7 @@
             this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
             this._tcpReceiver = new TcpReceive(maxPacketSize);
 
-            this._receiveBuffer.OnReadComplete = this.OnReadComplete;
+            this._receiveBuffer.OnWriteComplete = this.OnWriteComplete;
         }
 
         public void Connect(string server, int port)
@@ -408,102 +449,116 @@
             int offset,
             ushort count)
         {
-            var sendData = 
-                new SendData
-                {
-                    Data = data,
-                    Offset = offset,
-                    Count = count,
-                    Tcs = new TaskCompletionSource<TcpPacket>(),
-                };
+            int index;
+            ushort transactionId;
 
-            Task.Factory.StartNew(
-                GetReadAsync, 
-                sendData, 
-                CancellationToken.None);
-
-            return sendData.Tcs.Task;
-        }
-
-        private struct SendData
-        {
-            public byte[] Data;
-            public int Offset;
-            public ushort Count;
-            public TaskCompletionSource<TcpPacket> Tcs;
-        }
-
-        private async void GetReadAsync(object state)
-        {
-            SendData sendData = (SendData) state;
-
-            await _semaphoreSlim.WaitAsync();
-
-            try
+            lock (_lock)
             {
-                Send(sendData.Data, sendData.Offset, sendData.Count);
-
-                byte[] readData;
-                int readOffset, readReceivedBytes;
-                while (!this._receiveBuffer.GetReadData(out readData, out readOffset, out readReceivedBytes))
+                if (this._freeSendAndReceiveStateCount > 0)
                 {
-                    // TODO: Move this to an event or delegate
-                    //await Task.Delay(1);
+                    index = this._freeSendAndReceiveStateIndices[--this._freeSendAndReceiveStateCount];
+                }
+                else
+                {
+                    if (this._sendAndReceiveStateCount == this._sendAndReceiveStates.Length)
+                    {
+                        Array.Resize(ref _sendAndReceiveStates, 2 * this._sendAndReceiveStateCount);
+                    }
+
+                    index = this._sendAndReceiveStateCount++;
                 }
 
-                var readDataCopy = new byte[readReceivedBytes];
-                Array.Copy(readData, readOffset, readDataCopy, 0, readReceivedBytes);
+                transactionId = this._nextTransactionId++;
 
-                this._receiveBuffer.NextRead(closeConnection: false);
+                this._transactionIdToStateIndex[transactionId] = index;
+            }
 
-                sendData.Tcs.SetResult(new TcpPacket
-                {
-                    Data = readDataCopy,
-                    Size = readReceivedBytes
-                });
-            }
-            finally
-            {
-                _semaphoreSlim.Release();
-            }
+            ref var sendAndReceiveData = ref this._sendAndReceiveStates[index];
+
+            sendAndReceiveData.Tcs = new TaskCompletionSource<TcpPacket>();
+            sendAndReceiveData.TransactionId = transactionId;
+
+            Post(transactionId, data, offset, count);
+
+            return sendAndReceiveData.Tcs.Task;
         }
 
-        public void Send(
+        public void Post(
+            ushort transactionId,
             byte[] data,
             int offset,
             ushort count)
         {
-            _stream.WriteWithSizePreamble(data, offset, count);
-        }
-
-        public void Read(
-            byte[] receiveData,
-            int receiveOffset,
-            int receiveSize,
-            out int receivedBytes)
-        {
-            //_stream.ReadWithSizePreamble(receiveData, receiveOffset, receiveSize, out receivedBytes);
-
-            byte[] data;
-            int offset;
-            while (!this._receiveBuffer.GetReadData(out data, out offset, out receivedBytes))
+            lock (_lock)
             {
+                _stream.WriteFrame(transactionId, data, offset, count);
             }
-
-            Array.Copy(data, offset, receiveData, receiveOffset, receivedBytes);
-
-            this._receiveBuffer.NextRead(closeConnection: false);
         }
 
-        private void OnReadComplete()
-        {
+        //public void Read(
+        //    byte[] receiveData,
+        //    int receiveOffset,
+        //    int receiveSize,
+        //    out ushort transactionId,
+        //    out int receivedBytes)
+        //{
+        //    //_stream.ReadWithSizePreamble(receiveData, receiveOffset, receiveSize, out receivedBytes);
 
+        //    byte[] data;
+        //    int offset;
+        //    while (!this._receiveBuffer.GetReadData(out data, out offset, out receivedBytes))
+        //    {
+        //    }
+
+        //    Array.Copy(data, offset, receiveData, receiveOffset, receivedBytes);
+
+        //    this._receiveBuffer.NextRead(closeConnection: false);
+        //}
+
+        private void OnWriteComplete()
+        {
+            lock (_lock)
+            {
+                if (this._receiveBuffer.Count > 0)
+                {
+                    this._receiveBuffer.GetState(out TcpClient client, out ushort transactionId);
+
+                    if (this._transactionIdToStateIndex.ContainsKey(transactionId))
+                    {
+                        this._receiveBuffer.GetReadData(out byte[] readData, out int readOffset, out int readReceivedBytes);
+
+                        var index = this._transactionIdToStateIndex[transactionId];
+
+                        var packet = new TcpPacket
+                        {
+                            Data = readData,
+                            Offset = readOffset,
+                            Size = readReceivedBytes
+                        };
+
+                        this._transactionIdToStateIndex.Remove(transactionId);
+
+                        this._freeSendAndReceiveStateIndices[this._freeSendAndReceiveStateCount++] = index;
+
+                        this._receiveBuffer.NextRead(closeConnection: false);
+
+                        this._sendAndReceiveStates[index].Tcs.SetResult(packet);
+                    }
+                }
+            }
+        }
+
+        internal struct SendAndReceiveState
+        {
+            public TaskCompletionSource<TcpPacket> Tcs;
+            public ushort TransactionId;
         }
     }
 
     public class TcpPacket
     {
         public byte[] Data;
+        public int Offset;
         public int Size;
     }
 }

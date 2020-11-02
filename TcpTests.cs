@@ -1,4 +1,4 @@
-﻿//#define PRINT_DATA
+﻿#define PRINT_DATA
 
 using MessagePack;
 using Networking.Core;
@@ -54,19 +54,16 @@ namespace CodeTestsConsole
                 clients[i].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
             }
 
-            var serializer = new Serializer();
-            //var sendStr = $"Client Message: {new string('c', 128)}";
-
             // Send requests from clients to server.
 
-            //byte[] sendData = new byte[256];
-
-            const int TestRequestCount = 10000;
+            const int TestRequestCount = 10;
 
             Logger.Info($"Executing {TestRequestCount:N0} send/receive requests for {ClientCount} clients.");
 
             using (var sw = new LoggerStopWatch(Logger))
             {
+                var tasks = new List<Task<TcpPacket>>();
+
                 for (int i = 0; i < TestRequestCount; i++)
                 {
                     var clientIndex = Random.Next() % clients.Length;
@@ -80,47 +77,31 @@ namespace CodeTestsConsole
                             MyString = "abcdefghijklmnopqrstuvwxyz.",
                         });
 
-                    //client.Send(sendData, 0, (ushort)sendData.Length);
+                    //var tcpPacket = await client.SendAsync(sendData, 0, (ushort)sendData.Length);
 
-                    //byte[] recvData = new byte[12000];
+                    //var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(tcpPacket.Data);
 
-                    //client.Read(recvData, 0, recvData.Length, out int receiveBytes);
 
-                    //var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(recvData);
+                    tasks.Add(client.SendAsync(sendData, 0, (ushort)sendData.Length));
 
-                    var tcpPacket = await client.SendAsync(sendData, 0, (ushort)sendData.Length);
-
-                    var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(tcpPacket.Data);
-
-                    //serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
-#if PRINT_DATA
-                        Logger.Info($"Client {clientIndex} Receive: {receivedObj}");
-#endif //PRINT_DATA
-
-#if MOTHBALL
-                    for (int j = 0; j < clients.Length; j++)
+                    if (tasks.Count == 10)
                     {
-                        var client = clients[j];
+                        await Task.WhenAll(tasks);
 
-                        //serializer.Serialize(sendStr, sendData, out int sendDataCount);
-                        //client.Send(sendData, 0, sendDataCount);
-
-                        var sendData = MessagePackSerializer.Serialize(msgPackData);
-
-                        client.Send(sendData, 0, (ushort) sendData.Length);
-
-                        byte[] recvData = new byte[12000];
-
-                        client.Read(recvData, 0, recvData.Length, out int receiveBytes);
-
-                        var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(recvData);
-
-                        //serializer.Deserialize(recvData, 0, receiveBytes, out string recvText);
+                        foreach (var task in tasks)
+                        {
+                            var receivedObj = MessagePackSerializer.Deserialize<SampleDataMsgPack>(task.Result.Data);
 #if PRINT_DATA
-                        Logger.Info($"Client {j} Receive: {receivedObj}");
+                            Logger.Info($"Client {clientIndex} Receive: {receivedObj}");
 #endif //PRINT_DATA
-                }
-#endif
+                        }
+
+                        tasks.Clear();
+                    }
+
+#if PRINT_DATA
+                        //Logger.Info($"Client {clientIndex} Receive: {receivedObj}");
+#endif //PRINT_DATA
                 }
             }
 
@@ -250,7 +231,7 @@ namespace CodeTestsConsole
                         _logger.Info($"Server received: {dataObj}");
 #endif //PRINT_DATA
 
-                                buffer.GetClient(out _remoteClient);
+                                buffer.GetState(out _remoteClient, out ushort transactionId);
 
                                 buffer.NextRead(closeConnection: false);
 
@@ -267,7 +248,7 @@ namespace CodeTestsConsole
                                     MyString = "The quick brown fox jumped over the lazy dogs.",
                                 });
 
-                                stream.WriteWithSizePreamble(writeData, 0, (ushort)writeData.Length);
+                                stream.WriteFrame(transactionId: transactionId, data: writeData, offset: 0, count: (ushort)writeData.Length);
                             }
                         }
                     }

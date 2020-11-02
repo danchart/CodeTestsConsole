@@ -367,7 +367,7 @@
         private readonly TcpReceiveBuffer _receiveBuffer;
         private readonly TcpReceive _tcpReceiver;
 
-        private SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(0, 1);
+        private SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(1);
 
         public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
@@ -408,42 +408,64 @@
             int offset,
             ushort count)
         {
-            TaskCompletionSource<TcpPacket> tcs = new TaskCompletionSource<TcpPacket>();
+            var sendData = 
+                new SendData
+                {
+                    Data = data,
+                    Offset = offset,
+                    Count = count,
+                    Tcs = new TaskCompletionSource<TcpPacket>(),
+                };
 
-            Task.Factory.StartNew(async () =>
+            Task.Factory.StartNew(
+                GetReadAsync, 
+                sendData, 
+                CancellationToken.None);
+
+            return sendData.Tcs.Task;
+        }
+
+        private struct SendData
+        {
+            public byte[] Data;
+            public int Offset;
+            public ushort Count;
+            public TaskCompletionSource<TcpPacket> Tcs;
+        }
+
+        private async void GetReadAsync(object state)
+        {
+            SendData sendData = (SendData) state;
+
+            await _semaphoreSlim.WaitAsync();
+
+            try
             {
-                await _semaphoreSlim.WaitAsync();
+                Send(sendData.Data, sendData.Offset, sendData.Count);
 
-                try
+                byte[] readData;
+                int readOffset, readReceivedBytes;
+                while (!this._receiveBuffer.GetReadData(out readData, out readOffset, out readReceivedBytes))
                 {
-                    Send(data, offset, count);
-
-                    byte[] readData;
-                    int readOffset, readReceivedBytes;
-                    while (!this._receiveBuffer.GetReadData(out readData, out readOffset, out readReceivedBytes))
-                    {
-                        // TODO: Move this to an event or delegate
-                        Task.Delay(10);
-                    }
-
-                    var readDataCopy = new byte[readReceivedBytes];
-                    Array.Copy(readData, readOffset, readDataCopy, 0, readReceivedBytes);
-
-                    this._receiveBuffer.NextRead(closeConnection: false);
-
-                    tcs.SetResult(new TcpPacket
-                    {
-                        Data = readDataCopy,
-                        Size = readReceivedBytes
-                    });
+                    // TODO: Move this to an event or delegate
+                    //await Task.Delay(1);
                 }
-                finally
+
+                var readDataCopy = new byte[readReceivedBytes];
+                Array.Copy(readData, readOffset, readDataCopy, 0, readReceivedBytes);
+
+                this._receiveBuffer.NextRead(closeConnection: false);
+
+                sendData.Tcs.SetResult(new TcpPacket
                 {
-                    _semaphoreSlim.Release();
-                }
-            });
-
-            return tcs.Task;
+                    Data = readDataCopy,
+                    Size = readReceivedBytes
+                });
+            }
+            finally
+            {
+                _semaphoreSlim.Release();
+            }
         }
 
         public void Send(

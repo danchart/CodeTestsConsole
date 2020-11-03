@@ -36,7 +36,6 @@
 
         public bool IsFull => this.Count == this.PacketCapacity;
 
-        //public int Count => (_writeQueueIndex + this.PacketCapacity - _readQueueIndex) % this.PacketCapacity;
         public int Count 
         {
             get
@@ -159,11 +158,11 @@
 
         private int GetReadIndex() => this._unwrappedTailIndex % this.PacketCapacity;
         private int GetWriteIndex() => this._unwrappedHeadIndex % this.PacketCapacity;
-    }
 
-    public struct TcpReceiveBufferState
-    {
-        public TcpClient Client;
-        public ushort TransactionId;
+        private struct TcpReceiveBufferState
+        {
+            public TcpClient Client;
+            public ushort TransactionId;
+        }
     }
 }

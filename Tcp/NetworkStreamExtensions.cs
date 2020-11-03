@@ -12,12 +12,18 @@ namespace Networking.Core
             int offset,
             ushort count)
         {
-            // Write message frame header.
-            var sizePreambleBytes = BitConverter.GetBytes((ushort)count);
-            var transactionIdBytes = BitConverter.GetBytes((ushort)transactionId);
+            Span<byte> dest = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(dest, count);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(dest.Slice(2, 2), transactionId);
 
-            stream.Write(sizePreambleBytes, 0, sizePreambleBytes.Length);
-            stream.Write(transactionIdBytes, 0, transactionIdBytes.Length);
+            stream.Write(dest.ToArray(), 0, dest.Length);
+
+            // Write message frame header.
+            //var sizePreambleBytes = BitConverter.GetBytes(count);
+            //var transactionIdBytes = BitConverter.GetBytes((ushort)transactionId);
+
+            //stream.Write(sizePreambleBytes, 0, sizePreambleBytes.Length);
+            //stream.Write(transactionIdBytes, 0, transactionIdBytes.Length);
 
             // Write data.
             stream.Write(data, 0, count);

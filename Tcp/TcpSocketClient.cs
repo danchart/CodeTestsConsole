@@ -130,7 +130,7 @@
                     var dataCopy = new byte[size];
                     Array.Copy(data, offset, dataCopy, 0, size);
 
-                    var packet = new TcpResponseMessage
+                    var responseMessage = new TcpResponseMessage
                     {
                         Data = dataCopy,
                         Offset = 0,
@@ -144,7 +144,7 @@
                     var tcs = this._sendAndReceiveStates[index].Tcs;
                     this._sendAndReceiveStates[index].Tcs = null; // for GC
 
-                    tcs.SetResult(packet);
+                    tcs.SetResult(responseMessage);
 
                     return true;
                 }

@@ -93,7 +93,6 @@
                 Client = client,
                 Stream = stream,
                 ReceiveBuffer = buffer,
-                ReceiverCancelToken = new AsyncCancelToken(),
             };
             state.Clients.Add(clientData);
 

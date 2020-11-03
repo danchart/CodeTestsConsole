@@ -30,7 +30,11 @@ namespace CodeTestsConsole
             // Testing constants:
 
             const int MaxPacketSize = 256;
-            const int PacketQueueCapacity = 16;
+            const int PacketQueueCapacity = 64;
+
+            const int TestRequestCount = 100000;
+            const int ClientCount = 10;
+            const int ConcurrentRequestCount = 100;
 
             // Start TCP server.
 
@@ -49,8 +53,6 @@ namespace CodeTestsConsole
 
             // TCP clients connecto to server.
 
-            const int ClientCount = 10;
-
             var clients = new TcpSocketClient[ClientCount];
 
             for (int i= 0; i < clients.Length; i++)
@@ -61,9 +63,7 @@ namespace CodeTestsConsole
 
             // Send requests from clients to server.
 
-            const int TestRequestCount = 100000;
-
-            Logger.Info($"Executing {TestRequestCount:N0} send/receive requests for {ClientCount} clients.");
+            Logger.Info($"Executing {TestRequestCount:N0} send/receive requests: clientCount={ClientCount}, concurrentRequests={ConcurrentRequestCount}");
 
             using (var sw = new LoggerStopWatch(Logger))
             {
@@ -97,7 +97,7 @@ namespace CodeTestsConsole
                     tasks.Add(client.SendAsync(sendData, 0, (ushort)sendData.Length));
                     clientIndices.Add(clientIndex);
 
-                    if (tasks.Count == 10)
+                    if (tasks.Count == ConcurrentRequestCount)
                     {
                         //Logger.Info($"Before {i} frames.");
 

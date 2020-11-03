@@ -29,7 +29,7 @@
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             this.Clients = new TcpClients(clientCapacity);
-            this._tcpReceiver = new TcpReceive(maxPacketSize, packetQueueCapacity);
+            this._tcpReceiver = new TcpReceive(logger, maxPacketSize, packetQueueCapacity);
 
             this.MaxPacketSize = maxPacketSize;
             this.PacketQueueCapacity = packetQueueCapacity;
@@ -276,13 +276,16 @@
         private readonly int MaxPacketSize;
         private readonly int MaxPacketCapacity;
 
+        private readonly ILogger _logger;
 
         public bool IsClient = false;
 
 
 
-        public TcpReceive(int maxPacketSize, int maxPacketCapacity)
+        public TcpReceive(ILogger logger, int maxPacketSize, int maxPacketCapacity)
         {
+            this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
             this.MaxPacketSize = maxPacketSize;
             this.MaxPacketCapacity = maxPacketCapacity;
         }
@@ -343,12 +346,17 @@
                 {
                     // Complete message data available.
 
-                    receiverData.ClientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size);
+                    if (receiverData.ClientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size))
+                    {
+                        // Copy data minus frame preamble
+                        Array.Copy(receiverData.AcceptReadBuffer, FrameHeaderSizeByteCount, data, offset, receiverData.MessageSize);
 
-                    // Copy data minus frame preamble
-                    Array.Copy(receiverData.AcceptReadBuffer, FrameHeaderSizeByteCount, data, offset, receiverData.MessageSize);
-
-                    receiverData.ClientData.ReceiveBuffer.NextWrite(receiverData.MessageSize, receiverData.ClientData.Client, receiverData.TransactionId);
+                        receiverData.ClientData.ReceiveBuffer.NextWrite(receiverData.MessageSize, receiverData.ClientData.Client, receiverData.TransactionId);
+                    }
+                    else
+                    {
+                        _logger.Error($"Out of receive buffer space: capacity={this.MaxPacketCapacity}");
+                    }
 
                     // Shift accept read buffer to the next frame, if any.
                     for (int i = FrameHeaderSizeByteCount + receiverData.MessageSize, j = 0; i < receiverData.AcceptReadBufferSize; i++, j++)
@@ -413,7 +421,7 @@
             this._client = new TcpClient();
 
             this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
-            this._tcpReceiver = new TcpReceive(maxPacketSize, packetQueueCapacity);
+            this._tcpReceiver = new TcpReceive(logger, maxPacketSize, packetQueueCapacity);
 
 
 
@@ -464,7 +472,8 @@
                 {
                     if (this._sendAndReceiveStateCount == this._sendAndReceiveStates.Length)
                     {
-                        Array.Resize(ref _sendAndReceiveStates, 2 * this._sendAndReceiveStateCount);
+                        Array.Resize(ref this._sendAndReceiveStates, 2 * this._sendAndReceiveStateCount);
+                        Array.Resize(ref this._freeSendAndReceiveStateIndices, 2 * this._sendAndReceiveStateCount);
                     }
 
                     index = this._sendAndReceiveStateCount++;

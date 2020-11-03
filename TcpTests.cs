@@ -149,6 +149,13 @@ namespace CodeTestsConsole
                 Logger.Info($"Client {i}: {(Processor.ClientCounts.ContainsKey(i) ? Processor.ClientCounts[i] : 0)}");
             }
 
+            
+
+            for (int i = 0; i < clients.Length; i++)
+            {
+                clients[i].Disconnect();
+            }
+
             Processor.Stop = true;
 
             //while (thread.ThreadState != ThreadState.Stopped) { }

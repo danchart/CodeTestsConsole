@@ -11,7 +11,7 @@
 
         private TcpListener _listener;
 
-        private bool _isStopped;
+        private AsyncCancelToken _cancelToken;
 
         private readonly TcpStreamMessageReader _tcpReceiver;
 
@@ -28,69 +28,81 @@
 
             this.MaxPacketSize = maxPacketSize;
             this.PacketQueueCapacity = packetQueueCapacity;
-
-            this._isStopped = true;
         }
 
         public void Start(IPEndPoint ipEndPoint)
         {
-            this._isStopped = false;
-
             // From: https://docs.microsoft.com/en-us/dotnet/api/system.net.sockets.tcplistener?view=netcore-3.1
 
             this._listener = new TcpListener(ipEndPoint);
+            this._cancelToken = new AsyncCancelToken();
 
             // Start listening for client requests.
             this._listener.Start();
 
             this._logger.Info("Waiting for a connection...");
 
-            this._listener.BeginAcceptTcpClient(AcceptClient, _listener);
+            this._listener.BeginAcceptTcpClient(
+                AcceptClient,
+                new AcceptClientState
+                {
+                    Listener = this._listener,
+                    StreamMessageReader = this._tcpReceiver,
+                    Clients = this.Clients,
+
+                    MaxPacketSize = this.MaxPacketSize,
+                    PacketQueueCapacity = this.PacketQueueCapacity,
+
+                    Logger = this._logger,
+
+                    CancelToken = this._cancelToken,
+                });
         }
 
         public void Stop()
         {
             // We need to flag the stop condition because the listener continues to dispatch the Accept callback
             // after TcpListener.Stop().
-            this._isStopped = true;
+            this._cancelToken.Cancel();
 
-            this._tcpReceiver.Stop();
+            while (!this._cancelToken.IsCanceled)
+            { }
+
             this.Clients.Stop();
             this._listener.Stop();
         }
 
-        private void AcceptClient(IAsyncResult ar)
+        private static void AcceptClient(IAsyncResult ar)
         {
-            if (this._isStopped)
+            var state = (AcceptClientState)ar.AsyncState;
+
+            if (state.CancelToken.IsCanceled)
             {
                 return;
             }
 
-            var listener = ar.AsyncState as TcpListener;
-
-            if (listener == null)
-            {
-                return;
-            }
-
-            TcpClient client = listener.EndAcceptTcpClient(ar);
+            TcpClient client = state.Listener.EndAcceptTcpClient(ar);
             NetworkStream stream = client.GetStream();
-            TcpReceiveBuffer buffer = new TcpReceiveBuffer(maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
+            TcpReceiveBuffer buffer = 
+                new TcpReceiveBuffer(
+                    maxPacketSize: state.MaxPacketSize, 
+                    packetQueueCapacity: state.PacketQueueCapacity);
 
             var clientData = new TcpClientData
             {
                 Client = client,
                 Stream = stream,
                 ReceiveBuffer = buffer,
+                ReceiverCancelToken = new AsyncCancelToken(),
             };
-            this.Clients.Add(clientData);
+            state.Clients.Add(clientData);
 
-            this._tcpReceiver.Start(stream, clientData);
+            state.StreamMessageReader.Start(stream, clientData);
 
-            this._logger.Info($"Connected. RemoteEp={client.Client.RemoteEndPoint}");
+            state.Logger.Info($"Connected. RemoteEp={client.Client.RemoteEndPoint}");
 
             // Begin waiting for the next request.
-            listener.BeginAcceptTcpClient(AcceptClient, listener);
+            state.Listener.BeginAcceptTcpClient(AcceptClient, state);
         }
 
         public class TcpClientsEventArgs : EventArgs
@@ -261,6 +273,20 @@
 
                 this._count--;
             }
+        }
+
+        private sealed class AcceptClientState
+        {
+            public TcpListener Listener;
+            public TcpStreamMessageReader StreamMessageReader;
+            public TcpClients Clients;
+
+            public AsyncCancelToken CancelToken;
+
+            public ILogger Logger;
+
+            public int MaxPacketSize;
+            public int PacketQueueCapacity;
         }
     }
 }

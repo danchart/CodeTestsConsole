@@ -11,6 +11,8 @@
         private TcpClient _client;
         private NetworkStream _stream;
 
+        private AsyncCancelToken _receiverCancelToken;
+
         private readonly TcpReceiveBuffer _receiveBuffer;
         private readonly TcpStreamMessageReader _tcpReceiver;
 
@@ -41,6 +43,7 @@
         {
             _client.Connect(server, port);
             _stream = _client.GetStream();
+            _receiverCancelToken = new AsyncCancelToken();
 
             this._tcpReceiver.Start(
                 this._stream,
@@ -49,12 +52,20 @@
                     Client = this._client,
                     Stream = this._stream,
                     ReceiveBuffer = this._receiveBuffer,
+                    ReceiverCancelToken = _receiverCancelToken
                 });
         }
 
         public void Disconnect()
         {
-            _stream.Close();
+            _receiverCancelToken.Cancel();
+
+            while (!_receiverCancelToken.IsCanceled)
+            {
+                break;
+            }
+
+            //_stream.Close();
             _client.Close();
         }
 

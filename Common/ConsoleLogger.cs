@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Common.Core;
+using System;
 
 namespace CodeTestsConsole
 {

@@ -1,4 +1,4 @@
-﻿namespace CodeTestsConsole
+﻿namespace Networking.Core
 {
     using System.Net.Sockets;
 

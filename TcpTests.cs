@@ -1,5 +1,6 @@
 ﻿//#define PRINT_DATA
 
+using Common.Core;
 using MessagePack;
 using Networking.Core;
 using System;
@@ -67,7 +68,7 @@ namespace CodeTestsConsole
 
             using (var sw = new LoggerStopWatch(Logger))
             {
-                var tasks = new List<Task<TcpPacket>>();
+                var tasks = new List<Task<TcpResponseMessage>>();
                 var clientIndices = new List<int>();
 
                 for (int i = 0; i < TestRequestCount; i++)
@@ -190,6 +191,10 @@ namespace CodeTestsConsole
             Debug.Assert("I'm server" == receivedStr2);
 #endif
             server.Stop();
+
+            //Thread.Sleep(250);
+
+            //int iii = 0;
         }
 
         private static void Clients_OnClientRemoved(object sender, TcpSocketListener.TcpClientsEventArgs e)

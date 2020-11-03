@@ -1,4 +1,4 @@
-﻿namespace CodeTestsConsole
+﻿namespace Common.Core
 {
     public interface ILogger
     {

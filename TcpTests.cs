@@ -259,10 +259,6 @@ namespace CodeTestsConsole
 
             public void Run()
             {
-                var serializer = new Serializer();
-
-                var sendStr = $"Server Message: {new string('s', 128)}";
-
                 while (!Stop)
                 {
                     lock (_lock)
@@ -321,28 +317,6 @@ namespace CodeTestsConsole
                         }
                     }
                 }
-            }
-        }
-
-        private class Serializer
-        {
-            public void Serialize(string text, byte[] data, out int count)
-            {
-                count = Encoding.ASCII.GetBytes(text, 0, text.Length, data, 1);
-
-                data[0] = (byte)count;
-
-                count++; // length prefix
-            }
-
-            public int Deserialize(byte[] data, int offset, int count, out string text)
-            {
-                var byteCount = data[0];
-
-                text = Encoding.ASCII.GetString(data, 1, byteCount);
-                offset = byteCount;
-
-                return offset + byteCount;
             }
         }
 

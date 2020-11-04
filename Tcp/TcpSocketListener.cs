@@ -96,7 +96,7 @@
             state.Logger.Info($"Connected. remoteEp={client.Client.RemoteEndPoint}");
 
             // Since we're adding a new client this is a great time to clean up any disconnected clients.
-            state.Clients.CleanupDisconnectedClients();
+            state.Clients.CleanupAnyDisconnectedClients();
 
             try
             {
@@ -158,7 +158,7 @@
 
             public TcpClientData Get(int index) => this._clients[index];
 
-            public void CleanupDisconnectedClients()
+            public void CleanupAnyDisconnectedClients()
             {
                 Lock();
 
@@ -174,7 +174,7 @@
 
                             if (i != this._count - 1)
                             {
-                                // Move last element to this position.
+                                // Move last element to removed index.
 
                                 this._clients[i] = this._clients[this._count - 1];
                             }

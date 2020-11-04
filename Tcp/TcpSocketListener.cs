@@ -167,7 +167,7 @@
                     {
                         if (!this._clients[i].Client.Client.Connected)
                         {
-                            this._logger.Info($"Cleaning up disconnect client: index={i}, localEp={this._clients[i].Client.Client.LocalEndPoint}");
+                            this._logger.Verbose($"Cleaning up disconnect client: index={i}");
 
                             this._clients[i].ClearAndClose();
 
@@ -176,10 +176,11 @@
                                 // Move last element to this position.
 
                                 this._clients[i] = this._clients[this._count - 1];
-                                this._clients[this._count - 1] = default;
-
-                                this._count--;
                             }
+
+                            this._clients[this._count - 1] = default;
+
+                            this._count--;
                         }
                     }
                 }

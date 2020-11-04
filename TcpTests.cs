@@ -15,7 +15,7 @@ namespace CodeTestsConsole
 {
     public static class TcpTests
     {
-        internal static ILogger Logger = new ConsoleLogger();
+        internal static ILogger Logger = new ConsoleLogger(maxLevel: 5);
 
         internal static ServerProcessor Processor;
 
@@ -75,7 +75,8 @@ namespace CodeTestsConsole
                 {
                     var clientIndex = Random.Next() % clients.Length;
 
-                    if (i % 5000 == 0)
+                    //if (i % 5000 == 0)
+                    if ((i % 10000) == (Math.Abs((Random.Next()) % 10000)))
                     {
                         clients[clientIndex].Disconnect();
 
@@ -283,6 +284,11 @@ namespace CodeTestsConsole
 
                                 buffer.NextRead(closeConnection: false);
 
+                                if (!remoteClient.Connected)
+                                {
+                                    continue;
+                                }
+
 
                                 receivedMessage.TransactionId = transactionId;
 
@@ -303,7 +309,14 @@ namespace CodeTestsConsole
 
                                 var sendMessageBytes = MessagePackSerializer.Serialize(sendMessage);
 
-                                stream.WriteFrame(transactionId: transactionId, data: sendMessageBytes, offset: 0, count: (ushort)sendMessageBytes.Length);
+                                try
+                                {
+                                    stream.WriteFrame(transactionId: transactionId, data: sendMessageBytes, offset: 0, count: (ushort)sendMessageBytes.Length);
+                                }
+                                catch (Exception e)
+                                {
+                                    Logger.Verbose($"Failed to write to client: e={e}");
+                                }
                             }
                         }
                     }

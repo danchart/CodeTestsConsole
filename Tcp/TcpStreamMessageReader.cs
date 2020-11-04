@@ -59,6 +59,12 @@
             try
             {
                 bytesRead = stream.EndRead(ar);
+
+                if (bytesRead == 0)
+                {
+                    stream.Close();
+                    state.ClientData.Client.Close();
+                }
             }
             catch
             {

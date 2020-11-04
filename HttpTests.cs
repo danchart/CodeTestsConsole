@@ -15,7 +15,7 @@ namespace CodeTestsConsole
     {
         public static void HttpClientServerSendReceive()
         {
-            var logger = new ConsoleLogger();
+            var logger = new ConsoleLogger(maxLevel: 5);
 
             var endpoint = "http://localhost:27007/";
 

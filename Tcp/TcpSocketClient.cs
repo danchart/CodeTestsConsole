@@ -4,10 +4,16 @@
     using System;
     using System.Collections.Generic;
     using System.Net.Sockets;
+    using System.Threading;
     using System.Threading.Tasks;
 
     public class TcpSocketClient
     {
+        /// <summary>
+        /// Timeout for send and receive RTT.
+        /// </summary>
+        public int TimeoutInMilliseconds = 30000;
+
         private TcpClient _client;
         private NetworkStream _stream;
 
@@ -19,13 +25,15 @@
         private object _stateLock = new object();
         private object _streamWriteLock = new object();
 
-        private SendAndReceiveState[] _sendAndReceiveStates = new SendAndReceiveState[16];
-        private int _sendAndReceiveStateCount = 0;
+        private SendAndReceiveState[] _sendAndReceiveStates;
+        private int _sendAndReceiveStateCount;
 
-        private int[] _freeSendAndReceiveStateIndices = new int[16];
-        private int _freeSendAndReceiveStateCount = 0;
+        private int[] _freeSendAndReceiveStateIndices;
+        private int _freeSendAndReceiveStateCount;
 
-        private Dictionary<int, int> _transactionIdToStateIndex = new Dictionary<int, int>(16);
+        private Dictionary<int, int> _transactionIdToStateIndex;
+
+        private readonly Action<object> OnCancelResponseTcs;
 
         public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
@@ -34,7 +42,15 @@
             this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
             this._tcpReceiver = new TcpStreamMessageReader(logger, maxPacketSize, packetQueueCapacity);
 
+            this._sendAndReceiveStates = new SendAndReceiveState[packetQueueCapacity];
+            this._freeSendAndReceiveStateIndices = new int[packetQueueCapacity];
+            this._transactionIdToStateIndex = new Dictionary<int, int>(packetQueueCapacity);
+
+            this._sendAndReceiveStateCount = 0;
+            this._freeSendAndReceiveStateCount = 0;
+
             this._receiveBuffer.OnWriteComplete = this.OnWriteComplete;
+            this.OnCancelResponseTcs = OnSendAsyncCancellation;
         }
 
         public void Connect(string server, int port)
@@ -54,10 +70,13 @@
 
         public void Disconnect()
         {
-            //_stream.Close();
+            _stream.Close();
             _client.Close();
         }
 
+        /// <summary>
+        /// Sends a TCP message. Returns response.
+        /// </summary>
         public Task<TcpResponseMessage> SendAsync(
             byte[] data,
             int offset,
@@ -97,11 +116,22 @@
             sendAndReceiveData.Tcs = tcs;
             sendAndReceiveData.TransactionId = transactionId;
 
+            var cancellationTokenSource = new CancellationTokenSource(millisecondsDelay: TimeoutInMilliseconds);
+
+            sendAndReceiveData.CancellationTokenSource = cancellationTokenSource;
+
+            _ = cancellationTokenSource.Token.Register(
+                OnCancelResponseTcs, 
+                transactionId);
+
             Post(transactionId, data, offset, count);
 
             return tcs.Task;
         }
 
+        /// <summary>
+        /// Posts a TCP message. This returns immediately with no response.
+        /// </summary>
         public void Post(
             ushort transactionId,
             byte[] data,
@@ -111,6 +141,38 @@
             lock (_streamWriteLock)
             {
                 _stream.WriteFrame(transactionId, data, offset, count);
+            }
+        }
+
+        private void OnSendAsyncCancellation(object obj)
+        {
+            lock (_stateLock)
+            {
+                ushort transactionId = (ushort)obj;
+
+                if (this._transactionIdToStateIndex.ContainsKey(transactionId))
+                {
+                    var index = this._transactionIdToStateIndex[transactionId];
+
+                    this._transactionIdToStateIndex.Remove(transactionId);
+
+                    this._freeSendAndReceiveStateIndices[this._freeSendAndReceiveStateCount++] = index;
+
+                    ref var state = ref this._sendAndReceiveStates[index];
+
+                    var tcs = state.Tcs;
+
+                    state.Tcs = null; // for GC
+
+                    if (!tcs.Task.IsCompleted)
+                    {
+                        tcs.TrySetCanceled();
+
+                        // Dispose CTS
+                        state.CancellationTokenSource.Dispose();
+                        state.CancellationTokenSource = null; // for GC
+                    }
+                }
             }
         }
 
@@ -141,10 +203,21 @@
 
                     this._freeSendAndReceiveStateIndices[this._freeSendAndReceiveStateCount++] = index;
 
-                    var tcs = this._sendAndReceiveStates[index].Tcs;
-                    this._sendAndReceiveStates[index].Tcs = null; // for GC
+                    ref var state = ref this._sendAndReceiveStates[index];
 
-                    tcs.SetResult(responseMessage);
+                    var tcs = state.Tcs;
+
+                    state.Tcs = null; // for GC
+
+                    if (!tcs.Task.IsCanceled)
+                    {
+                        // Dispose CTS
+                        state.CancellationTokenSource.Dispose();
+                        state.CancellationTokenSource = null; // for GC
+
+                        // Successfully received response before cancellation.
+                        tcs.SetResult(responseMessage);
+                    }
 
                     return true;
                 }
@@ -155,6 +228,7 @@
 
         internal struct SendAndReceiveState
         {
+            public CancellationTokenSource CancellationTokenSource;
             public TaskCompletionSource<TcpResponseMessage> Tcs;
             public ushort TransactionId;
         }

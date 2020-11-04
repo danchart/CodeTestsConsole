@@ -31,7 +31,7 @@ namespace CodeTestsConsole
             // Testing constants:
 
             const int MaxPacketSize = 256;
-            const int PacketQueueCapacity = 64;
+            const int PacketQueueCapacity = 256;
 
             const int TestRequestCount = 100000;
             const int ClientCount = 10;
@@ -74,9 +74,18 @@ namespace CodeTestsConsole
                 for (int i = 0; i < TestRequestCount; i++)
                 {
                     var clientIndex = Random.Next() % clients.Length;
+
+                    if (i % 5000 == 0)
+                    {
+                        clients[clientIndex].Disconnect();
+
+                        clients[clientIndex] = new TcpSocketClient(Logger, maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
+                        clients[clientIndex].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
+                    }
+
                     var client = clients[clientIndex];
 
-                    var sendMessage = new SampleDataMsgPack
+                     var sendMessage = new SampleDataMsgPack
                     {
                         ClientId = clientIndex,
                         MyInt = i,
@@ -149,7 +158,6 @@ namespace CodeTestsConsole
                 Logger.Info($"Client {i}: {(Processor.ClientCounts.ContainsKey(i) ? Processor.ClientCounts[i] : 0)}");
             }
 
-            
 
             for (int i = 0; i < clients.Length; i++)
             {

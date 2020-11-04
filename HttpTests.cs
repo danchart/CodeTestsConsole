@@ -31,8 +31,9 @@ namespace CodeTestsConsole
         private static async Task WorkerAsync(string endpoint, ILogger logger)
         {
             const int RoundTripCount = 100000;
+            const int ConcurrentRequests = 100;
 
-            logger.Info($"Executing {RoundTripCount:N0} send/receive requests.");
+            logger.Info($"Executing {RoundTripCount:N0} send/receive requests: concurrentRequests={ConcurrentRequests}");
 
             using (var httpClient = new HttpClient())
             {
@@ -47,7 +48,7 @@ namespace CodeTestsConsole
                             Content = new StringContent("Hello, world!")
                         }));
 
-                        if (tasks.Count == 10)
+                        if (tasks.Count == ConcurrentRequests)
                         {
                             var taskSendAll = Task.WhenAll(tasks);
 
@@ -108,7 +109,7 @@ namespace CodeTestsConsole
                 _listener.BeginGetContext(new AsyncCallback(ListenerCallback), _listener);
             }
 
-            public void ListenerCallback(IAsyncResult result)
+            public static void ListenerCallback(IAsyncResult result)
             {
                 HttpListener listener = (HttpListener)result.AsyncState;
                 // Call EndGetContext to complete the asynchronous operation.

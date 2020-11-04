@@ -4,7 +4,12 @@
 
     public class TcpReceiveBuffer
     {
-        public delegate bool OnBeforeWriteCompleteAction(byte[] data, int offset, int size, TcpClient client, ushort transactionId);
+        public delegate bool OnBeforeWriteCompleteAction(
+            byte[] data, 
+            int offset, 
+            int size, 
+            TcpClient client, 
+            ushort transactionId);
 
         public OnBeforeWriteCompleteAction OnWriteComplete;
 

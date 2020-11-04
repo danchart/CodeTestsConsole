@@ -1,6 +1,5 @@
 ﻿namespace Networking.Core
 {
-    using Common.Core;
     using System.Net.Sockets;
 
     internal sealed class TcpClientData

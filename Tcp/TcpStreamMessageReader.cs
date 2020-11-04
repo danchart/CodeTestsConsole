@@ -6,7 +6,7 @@
 
     internal sealed class TcpStreamMessageReader
     {
-        public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // size + transaction id
+        public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // Frame size + transaction id
 
         private readonly int MaxPacketSize;
         private readonly int MaxPacketCapacity;
@@ -31,6 +31,8 @@
                 AcceptReadBufferSize = 0,
                 MessageSize = 0,
 
+                ReadCallback = AcceptRead,
+
                 Logger = this._logger,
             };
 
@@ -38,7 +40,7 @@
                 state.AcceptReadBuffer,
                 0,
                 state.AcceptReadBuffer.Length,
-                AcceptRead,
+                state.ReadCallback,
                 state);
         }
 
@@ -48,7 +50,7 @@
 
             NetworkStream stream = state.ClientData.Stream;
 
-            if (!stream.CanRead)
+            if (stream == null || !stream.CanRead)
             {
                 return;
             }
@@ -118,11 +120,11 @@
             try
             {
                 // Begin waiting for more stream data.
-                stream.BeginRead(
+                _ = stream.BeginRead(
                     state.AcceptReadBuffer,
                     state.AcceptReadBufferSize,
                     state.AcceptReadBuffer.Length - state.AcceptReadBufferSize,
-                    AcceptRead,
+                    state.ReadCallback,
                     state);
             }
             catch
@@ -139,6 +141,9 @@
             public int AcceptReadBufferSize;
             public int MessageSize;
             public ushort TransactionId;
+
+            // Save delegate in state to avoid allocation per read.
+            public AsyncCallback ReadCallback;
 
             public ILogger Logger;
         }

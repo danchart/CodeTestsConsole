@@ -47,9 +47,9 @@ namespace CodeTestsConsole
             const int MaxPacketSize = 256;
             const int PacketQueueCapacity = 256;
 
-            const int TestRequestCount = 100;
+            const int TestRequestCount = 100000;
             const int ClientCount = 10;
-            const int ConcurrentRequestCount = 10;
+            const int ConcurrentRequestCount = 100;
 
             // Start TCP server.
 

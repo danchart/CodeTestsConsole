@@ -14,8 +14,6 @@ namespace Networking.Core
 
         public ProcessAsync ProcessAsyncCallback;
 
-        private static readonly Action<object> ProcessDelegateAsyncCallback = ProcessDelegate;
-
         private CancellationToken _token;
 
         private readonly TcpSocketListener _listener;
@@ -24,6 +22,10 @@ namespace Networking.Core
         private readonly ILogger _logger;
 
         private readonly object _lock = new object();
+
+        private readonly List<TcpReceiveBuffer> _pendingAddBuffers = new List<TcpReceiveBuffer>();
+        private readonly List<TcpReceiveBuffer> _pendingRemoveBuffers = new List<TcpReceiveBuffer>();
+        private int _lockCount = 0;
 
         private readonly int MaxConcurrentRequests;
 
@@ -66,11 +68,11 @@ namespace Networking.Core
         //    this._stop = true;
         //}
 
-        private static void ProcessDelegate(object state)
+        private async static Task ProcessDelegateAsync(object state)
         {
             var processState = (ProcessState)state;
 
-            var responseData = processState.CallbackAsync(processState.Data).Result;
+            var responseData = await processState.CallbackAsync(processState.Data).ConfigureAwait(false);
 
             if (responseData != null)
             {
@@ -107,11 +109,14 @@ namespace Networking.Core
 
         private void RunCore(CancellationToken token)
         {
-            HashSet<Task> tasks = new HashSet<Task>();
+            Task[] tasks = new Task[MaxConcurrentRequests];
+            int taskCount = 0;
 
             while (!token.IsCancellationRequested)
             {
-                lock (_lock)
+                Lock();
+
+                try
                 {
                     foreach (var buffer in _receiveBuffers)
                     {
@@ -123,9 +128,28 @@ namespace Networking.Core
                             buffer.GetState(out TcpClient remoteClient, out ushort transactionId);
                             buffer.NextRead(closeConnection: false);
 
-                            tasks.Add(
-                                Task.Factory.StartNew(
-                                    ProcessDelegateAsyncCallback,
+                            if (taskCount == tasks.Length)
+                            {
+                                // Clean up completed tasks
+
+                                Task.WhenAny(tasks).Wait();
+
+                                for (int i = taskCount - 1; i >= 0; i--)
+                                {
+                                    if (tasks[i].IsCompleted)
+                                    {
+                                        if (i != taskCount - 1)
+                                        {
+                                            tasks[i] = tasks[taskCount - 1];
+                                        }
+
+                                        taskCount--;
+                                    }
+                                }
+                            }
+
+                            tasks[taskCount++] =
+                                ProcessDelegateAsync(
                                     new ProcessState
                                     {
                                         CallbackAsync = ProcessAsyncCallback,
@@ -133,34 +157,63 @@ namespace Networking.Core
                                         RemoteClient = remoteClient,
                                         TransactionId = transactionId,
                                         Logger = _logger,
-                                    },
-                                    token));
-
-                            if (tasks.Count >= MaxConcurrentRequests)
-                            {
-                                var taskDone = Task.WhenAny(tasks).Result;
-
-                                tasks.Remove(taskDone);
-                            }
+                                    });
                         }
                     }
+                }
+                finally
+                {
+                    Unlock();
                 }
             }
         }
 
+        private void Lock() => this._lockCount++;
+
+        private void Unlock()
+        {
+            if (this._lockCount == 1)
+            {
+                lock (this._lock)
+                {
+                    foreach (var receiveBuffer in this._pendingRemoveBuffers)
+                    {
+                        _receiveBuffers.Remove(receiveBuffer);
+                    }
+
+                    this._pendingRemoveBuffers.Clear();
+
+                    foreach (var receiveBuffer in this._pendingAddBuffers)
+                    {
+                        _receiveBuffers.Add(receiveBuffer);
+                    }
+
+                    this._pendingAddBuffers.Clear();
+                }
+            }
+
+            this._lockCount--;
+        }
+
         private void Clients_OnClientRemoved(object sender, TcpSocketListener.TcpClientsEventArgs e)
         {
-            lock (_lock)
+            if (this._lockCount > 0)
             {
-                _receiveBuffers.Remove(e.ReceiveBuffer);
+                lock (this._lock)
+                {
+                    _pendingRemoveBuffers.Add(e.ReceiveBuffer);
+                }
             }
         }
 
         private void Clients_OnClientAdded(object sender, TcpSocketListener.TcpClientsEventArgs e)
         {
-            lock (_lock)
+            if (this._lockCount > 0)
             {
-                _receiveBuffers.Add(e.ReceiveBuffer);
+                lock (this._lock)
+                {
+                    _pendingAddBuffers.Add(e.ReceiveBuffer);
+                }
             }
         }
     }

@@ -1,7 +1,6 @@
-﻿using Common.Core;
-using System;
+﻿using System;
 
-namespace CodeTestsConsole
+namespace Common.Core
 {
     /// <summary>
     /// Simple console logger.

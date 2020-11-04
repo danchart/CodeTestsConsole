@@ -11,6 +11,9 @@
 
         private TcpListener _listener;
 
+        // Instantiate static delegate to avoid allocations on every BeginAcceptTcpClient.
+        private readonly static AsyncCallback AcceptCallback = AcceptClient;
+
         private readonly TcpStreamMessageReader _tcpReceiver;
 
         private readonly ILogger _logger;
@@ -30,18 +33,16 @@
 
         public void Start(IPEndPoint ipEndPoint)
         {
-            // From: https://docs.microsoft.com/en-us/dotnet/api/system.net.sockets.tcplistener?view=netcore-3.1
-
             this._listener = new TcpListener(ipEndPoint);
 
             // Start listening for client requests.
             this._listener.Start();
 
-            this._logger.Info($"Started TCP listener on {this._listener.LocalEndpoint}");
+            this._logger.Info($"Started TCP listener. localEp={this._listener.LocalEndpoint}");
             this._logger.Info("Waiting for a connection...");
 
             this._listener.BeginAcceptTcpClient(
-                AcceptClient,
+                AcceptCallback,
                 new AcceptClientState
                 {
                     Listener = this._listener,
@@ -92,7 +93,7 @@
 
             state.StreamMessageReader.Start(stream, clientData);
 
-            state.Logger.Info($"Connected. RemoteEp={client.Client.RemoteEndPoint}");
+            state.Logger.Info($"Connected. remoteEp={client.Client.RemoteEndPoint}");
 
             // Since we're adding a new client this is a great time to clean up any disconnected clients.
             state.Clients.CleanupDisconnectedClients();
@@ -100,7 +101,7 @@
             try
             {
                 // Begin waiting for the next request.
-                state.Listener.BeginAcceptTcpClient(AcceptClient, state);
+                state.Listener.BeginAcceptTcpClient(AcceptCallback, state);
             }
             catch
             {

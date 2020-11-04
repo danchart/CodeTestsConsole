@@ -76,7 +76,7 @@ namespace CodeTestsConsole
                     var clientIndex = Random.Next() % clients.Length;
 
                     //if (i % 5000 == 0)
-                    if ((i % 10000) == (Math.Abs((Random.Next()) % 10000)))
+                    if (false && (i % 10000) == (Math.Abs((Random.Next()) % 10000)))
                     {
                         clients[clientIndex].Disconnect();
 

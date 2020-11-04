@@ -5,9 +5,8 @@ using MessagePack;
 using Networking.Core;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -17,13 +16,28 @@ namespace CodeTestsConsole
     {
         internal static ILogger Logger = new ConsoleLogger(maxLevel: 5);
 
-        internal static ServerProcessor Processor;
+        //internal static ServerProcessor Processor;
 
         internal static Random Random = new Random();
 
         public static void TcpClientServerSendReceive()
         {
             RunAsync().Wait();
+        }
+
+        private static async Task<byte[]> ProcessAsync(byte[] data)
+        {
+            var requestMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(
+                new ReadOnlyMemory<byte>(data, 0, data.Length));
+
+            var responseMessage = new SampleDataMsgPack
+            {
+                ClientId = requestMessage.ClientId,
+                MyInt = requestMessage.MyInt,
+                MyString = "The quick brown fox jumped over the lazy dogs.",
+            };
+
+            return MessagePackSerializer.Serialize(responseMessage);
         }
 
         private static async Task RunAsync()
@@ -33,24 +47,27 @@ namespace CodeTestsConsole
             const int MaxPacketSize = 256;
             const int PacketQueueCapacity = 256;
 
-            const int TestRequestCount = 100000;
+            const int TestRequestCount = 100;
             const int ClientCount = 10;
-            const int ConcurrentRequestCount = 100;
+            const int ConcurrentRequestCount = 10;
 
             // Start TCP server.
 
-            var serverEndpoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 27005);
+            //IPAddress.Parse("127.0.0.1")
+            var addressList = Dns.GetHostEntry("localhost").AddressList;
+            var ipAddress = addressList.First();
+            var serverEndpoint = new IPEndPoint(ipAddress, 27005);
 
-            var server = new TcpSocketListener(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
-            server.Start(serverEndpoint);
+            //Processor = new ServerProcessor(Logger, capacity: 2);
 
-            Processor = new ServerProcessor(Logger, capacity: 2);
+            var server = new TcpServer(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueDepth: PacketQueueCapacity);
 
-            server.Clients.OnClientAdded += Clients_OnClientAdded;
-            server.Clients.OnClientRemoved += Clients_OnClientRemoved;
+            var cts = new CancellationTokenSource();
 
-            var serverThread = new Thread(Processor.Run);
-            serverThread.Start();
+            server.ProcessAsyncCallback = ProcessAsync;
+
+            server.Start(serverEndpoint, cts.Token);
+
 
             // TCP clients connecto to server.
 
@@ -59,7 +76,7 @@ namespace CodeTestsConsole
             for (int i= 0; i < clients.Length; i++)
             {
                 clients[i] = new TcpSocketClient(Logger, maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
-                clients[i].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
+                clients[i].Connect(new IPAddress[] { serverEndpoint.Address }, serverEndpoint.Port);
             }
 
             // Send requests from clients to server.
@@ -81,7 +98,7 @@ namespace CodeTestsConsole
                         clients[clientIndex].Disconnect();
 
                         clients[clientIndex] = new TcpSocketClient(Logger, maxPacketSize: MaxPacketSize, packetQueueCapacity: PacketQueueCapacity);
-                        clients[clientIndex].Connect(serverEndpoint.Address.ToString(), serverEndpoint.Port);
+                        clients[clientIndex].Connect(new IPAddress[] { serverEndpoint.Address }, serverEndpoint.Port);
                     }
 
                     var client = clients[clientIndex];
@@ -110,8 +127,6 @@ namespace CodeTestsConsole
 
                     if (tasks.Count == ConcurrentRequestCount)
                     {
-                        //Logger.Info($"Before {i} frames.");
-
                         var taskSendAll = Task.WhenAll(tasks);
 
                         await Task.WhenAny(
@@ -142,8 +157,6 @@ namespace CodeTestsConsole
 
                         tasks.Clear();
                         clientIndices.Clear();
-
-                        //Logger.Info($"After {i} frames.");
                     }
 
 #if PRINT_DATA
@@ -154,10 +167,10 @@ namespace CodeTestsConsole
 
             Logger.Info("Client counts:");
 
-            for (int i = 0; i < clients.Length; i++)
-            {
-                Logger.Info($"Client {i}: {(Processor.ClientCounts.ContainsKey(i) ? Processor.ClientCounts[i] : 0)}");
-            }
+            //for (int i = 0; i < clients.Length; i++)
+            //{
+            //    Logger.Info($"Client {i}: {(Processor.ClientCounts.ContainsKey(i) ? Processor.ClientCounts[i] : 0)}");
+            //}
 
 
             for (int i = 0; i < clients.Length; i++)
@@ -165,7 +178,9 @@ namespace CodeTestsConsole
                 clients[i].Disconnect();
             }
 
-            Processor.Stop = true;
+
+            cts.Cancel();
+            //Processor.Stop = true;
 
             //while (thread.ThreadState != ThreadState.Stopped) { }
 
@@ -206,13 +221,13 @@ namespace CodeTestsConsole
 
             Debug.Assert("I'm server" == receivedStr2);
 #endif
-            server.Stop();
+            //server.Stop();
 
             //Thread.Sleep(250);
 
             //int iii = 0;
         }
-
+#if MOTHBALL
         private static void Clients_OnClientRemoved(object sender, TcpSocketListener.TcpClientsEventArgs e)
         {
             Processor.Remove(e.ReceiveBuffer);
@@ -232,7 +247,7 @@ namespace CodeTestsConsole
             private readonly List<TcpReceiveBuffer> Buffers;
             private readonly ILogger _logger;
 
-            private static object _lock = new object();
+            private readonly object _lock = new object();
 
             public ServerProcessor(ILogger logger, int capacity)
             {
@@ -319,6 +334,8 @@ namespace CodeTestsConsole
                 }
             }
         }
+#endif
+
 
         [MessagePackObject]
         public class SampleDataMsgPack

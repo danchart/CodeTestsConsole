@@ -92,6 +92,7 @@
     <Compile Include="Tcp\TcpReceiveBuffer.cs" />
     <Compile Include="Tcp\TcpResponseMessage.cs" />
     <Compile Include="Tcp\TcpClientData.cs" />
+    <Compile Include="Tcp\TcpServer.cs" />
     <Compile Include="Tcp\TcpSocketClient.cs" />
     <Compile Include="Tcp\TcpSocketListener.cs" />
     <Compile Include="Tcp\TcpStreamMessageReader.cs" />

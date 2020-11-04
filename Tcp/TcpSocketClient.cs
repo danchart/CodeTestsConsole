@@ -3,6 +3,7 @@
     using Common.Core;
     using System;
     using System.Collections.Generic;
+    using System.Net;
     using System.Net.Sockets;
     using System.Threading;
     using System.Threading.Tasks;
@@ -38,7 +39,7 @@
 
         public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
-            this._client = new TcpClient();
+            this._client = new TcpClient(AddressFamily.InterNetworkV6);
 
             this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
             this._tcpReceiver = new TcpStreamMessageReader(logger, maxPacketSize, packetQueueCapacity);
@@ -57,9 +58,9 @@
             this._streamWriteLock = new object();
         }
 
-        public void Connect(string server, int port)
+        public void Connect(IPAddress[] ipAddresses, int port)
         {
-            _client.Connect(server, port);
+            _client.Connect(ipAddresses, port);
             _stream = _client.GetStream();
 
             this._tcpReceiver.Start(

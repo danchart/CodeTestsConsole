@@ -130,10 +130,11 @@
             private int[] _pendingRemoveIndices;
             private int _pendingRemoveCount;
 
-            private object _lockObj = new object();
             private int _lockCount;
 
-            private readonly ILogger _logger; 
+            private readonly ILogger _logger;
+
+            private readonly object _lockObj = new object();
 
             public TcpClients(ILogger logger, int capacity)
             {

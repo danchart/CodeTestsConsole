@@ -16,9 +16,8 @@
         public readonly int MaxPacketSize;
         public readonly int PacketCapacity;
 
-        private int[] _bytedReceived;
-
-        private TcpReceiveBufferState[] _states;
+        private readonly int[] _bytedReceived;
+        private readonly TcpReceiveBufferState[] _states;
 
         private int _unwrappedTailIndex; // current read index - range is [0, 2 * Capacity]
         private int _unwrappedHeadIndex; // current write index - range is [0, 2 * Capacity]

@@ -2,6 +2,7 @@
 {
     using Common.Core;
     using System;
+    using System.Diagnostics;
     using System.Net.Sockets;
 
     internal sealed class TcpStreamMessageReader
@@ -92,6 +93,8 @@
 
                     if (state.ClientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size))
                     {
+                        Debug.Assert(state.MessageSize <= size);
+                        
                         // Copy data minus frame preamble
                         Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, offset, state.MessageSize);
 

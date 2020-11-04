@@ -14,16 +14,9 @@
         /// </summary>
         public int TimeoutInMilliseconds = 30000;
 
-        private TcpClient _client;
-        private NetworkStream _stream;
-
-        private readonly TcpReceiveBuffer _receiveBuffer;
-        private readonly TcpStreamMessageReader _tcpReceiver;
-
         private ushort _nextTransactionId = 0;
 
-        private object _stateLock = new object();
-        private object _streamWriteLock = new object();
+        private NetworkStream _stream;
 
         private SendAndReceiveState[] _sendAndReceiveStates;
         private int _sendAndReceiveStateCount;
@@ -31,9 +24,17 @@
         private int[] _freeSendAndReceiveStateIndices;
         private int _freeSendAndReceiveStateCount;
 
-        private Dictionary<int, int> _transactionIdToStateIndex;
+        private readonly Dictionary<int, int> _transactionIdToStateIndex;
+
+        private readonly TcpClient _client;
+
+        private readonly TcpReceiveBuffer _receiveBuffer;
+        private readonly TcpStreamMessageReader _tcpReceiver;
 
         private readonly Action<object> OnCancelResponseTcs;
+
+        private readonly object _stateLock;
+        private readonly object _streamWriteLock;
 
         public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
@@ -51,6 +52,9 @@
 
             this._receiveBuffer.OnWriteComplete = this.OnWriteComplete;
             this.OnCancelResponseTcs = OnSendAsyncCancellation;
+
+            this._stateLock = new object();
+            this._streamWriteLock = new object();
         }
 
         public void Connect(string server, int port)
@@ -116,11 +120,11 @@
             sendAndReceiveData.Tcs = tcs;
             sendAndReceiveData.TransactionId = transactionId;
 
-            var cancellationTokenSource = new CancellationTokenSource(millisecondsDelay: TimeoutInMilliseconds);
+            var cts = new CancellationTokenSource(millisecondsDelay: TimeoutInMilliseconds);
 
-            sendAndReceiveData.CancellationTokenSource = cancellationTokenSource;
+            sendAndReceiveData.CancellationTokenSource = cts;
 
-            _ = cancellationTokenSource.Token.Register(
+            _ = cts.Token.Register(
                 OnCancelResponseTcs, 
                 transactionId);
 
@@ -189,16 +193,6 @@
                 {
                     var index = this._transactionIdToStateIndex[transactionId];
 
-                    var dataCopy = new byte[size];
-                    Array.Copy(data, offset, dataCopy, 0, size);
-
-                    var responseMessage = new TcpResponseMessage
-                    {
-                        Data = dataCopy,
-                        Offset = 0,
-                        Size = size
-                    };
-
                     this._transactionIdToStateIndex.Remove(transactionId);
 
                     this._freeSendAndReceiveStateIndices[this._freeSendAndReceiveStateCount++] = index;
@@ -215,8 +209,17 @@
                         state.CancellationTokenSource.Dispose();
                         state.CancellationTokenSource = null; // for GC
 
+                        var dataCopy = new byte[size];
+                        Array.Copy(data, offset, dataCopy, 0, size);
+
                         // Successfully received response before cancellation.
-                        tcs.SetResult(responseMessage);
+                        tcs.SetResult(
+                            new TcpResponseMessage
+                            {
+                                Data = dataCopy,
+                                Offset = 0,
+                                Size = size
+                            });
                     }
 
                     return true;

@@ -5,7 +5,7 @@
     internal sealed class TcpClientData
     {
         public TcpClient Client;
-        public NetworkStream Stream;
+        public NetworkStream Stream; // Cached reference of TcpClient.GetStream()
 
         public void ClearAndClose()
         {

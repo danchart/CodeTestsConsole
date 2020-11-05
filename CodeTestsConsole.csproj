@@ -78,6 +78,7 @@
     <Compile Include="Common\IClock.cs" />
     <Compile Include="Common\ILogger.cs" />
     <Compile Include="Common\RealClock.cs" />
+    <Compile Include="Common\RefDictionary.cs" />
     <Compile Include="EnumerableTests.cs" />
     <Compile Include="Helpers\ArrayExtensions.cs" />
     <Compile Include="Helpers\ConsoleStopWatch.cs" />

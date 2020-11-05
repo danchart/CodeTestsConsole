@@ -9,29 +9,27 @@
     {
         public delegate void HandleMessageCallback(byte[] data, NetworkStream stream, ushort transactionId);
 
-        public HandleMessageCallback HandleMessage;
-
         public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // Frame size + transaction id
 
         private bool _started;
 
-        private readonly int MaxPacketSize;
-        private readonly int MaxPacketCapacity;
+        private readonly int _maxMessageSize;
+        private readonly int _maxMessageQueueSize;
 
         private readonly ILogger _logger;
 
-        public TcpStreamMessageReader(ILogger logger, int maxMessageSize, int maxMessageCapacity)
+        public TcpStreamMessageReader(ILogger logger, int maxMessageSize, int maxMessageQueueSize)
         {
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            this.MaxPacketSize = maxMessageSize;
-            this.MaxPacketCapacity = maxMessageCapacity;
+            this._maxMessageSize = maxMessageSize;
+            this._maxMessageQueueSize = maxMessageQueueSize;
 
             this._started = false;
         }
 
         public void Start(
-            NetworkStream stream, 
+            NetworkStream stream,
             HandleMessageCallback handleMessageCallback)
         {
             if (this._started)
@@ -43,9 +41,9 @@
             {
                 Stream = stream,
 
-                AcceptReadBuffer = new byte[this.MaxPacketSize * this.MaxPacketCapacity],
+                AcceptReadBuffer = new byte[this._maxMessageSize * this._maxMessageQueueSize],
                 AcceptReadBufferSize = 0,
-                MessageSize = 0,
+                CurrentMessageSize = 0,
 
                 ReadCallback = AcceptRead,
                 HandleMessageCallback = handleMessageCallback,
@@ -76,14 +74,6 @@
             try
             {
                 bytesRead = stream.EndRead(ar);
-
-                if (bytesRead == 0)
-                {
-                    // Connection closed.
-                    stream.Close();
-
-                    return;
-                }
             }
             catch
             {
@@ -91,48 +81,53 @@
                 return;
             }
 
+            if (bytesRead == 0)
+            {
+                // Connection closed.
+                stream.Close();
+
+                return;
+            }
+
             state.AcceptReadBufferSize += bytesRead;
 
-            List<byte[]> datas = new List<byte[]>();
-            List<ushort> transactionIds = new List<ushort>();
+            List<MessageCallbackData> callbackDataItems = new List<MessageCallbackData>();
 
             // We need at least the frame header data to do anything.
             while (state.AcceptReadBufferSize >= FrameHeaderSizeByteCount)
             {
-                if (state.MessageSize == 0)
+                if (state.CurrentMessageSize == 0)
                 {
                     // Starting new message, get message size in bytes.
 
                     // First two bytes of the buffer is always the message size
-                    state.MessageSize = BitConverter.ToUInt16(state.AcceptReadBuffer, 0);
-                    state.TransactionId = BitConverter.ToUInt16(state.AcceptReadBuffer, 2);
+                    state.CurrentMessageSize = BitConverter.ToUInt16(state.AcceptReadBuffer, 0);
+                    state.CurrentTransactionId = BitConverter.ToUInt16(state.AcceptReadBuffer, 2);
                 }
 
-                if (FrameHeaderSizeByteCount + state.MessageSize <= state.AcceptReadBufferSize)
+                if (FrameHeaderSizeByteCount + state.CurrentMessageSize <= state.AcceptReadBufferSize)
                 {
                     // Complete message data available.
 
-                    // Copy data minus frame preamble
-                    byte[] data = new byte[state.MessageSize];
-                    Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, 0, state.MessageSize);
+                    var callbackData = new MessageCallbackData
+                    {
+                        Data = new byte[state.CurrentMessageSize],
+                        TransactionId = state.CurrentTransactionId,
+                    };
 
-                    var transactionId = state.TransactionId;
+                    // Copy data minus frame preamble
+                    Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, callbackData.Data, 0, state.CurrentMessageSize);
 
                     // Shift accept read buffer to the next frame, if any.
-                    for (int i = FrameHeaderSizeByteCount + state.MessageSize, j = 0; i < state.AcceptReadBufferSize; i++, j++)
+                    for (int i = FrameHeaderSizeByteCount + state.CurrentMessageSize, j = 0; i < state.AcceptReadBufferSize; i++, j++)
                     {
                         state.AcceptReadBuffer[j] = state.AcceptReadBuffer[i];
                     }
 
-                    state.AcceptReadBufferSize -= state.MessageSize + FrameHeaderSizeByteCount;
-                    state.MessageSize = 0;
+                    state.AcceptReadBufferSize -= state.CurrentMessageSize + FrameHeaderSizeByteCount;
+                    state.CurrentMessageSize = 0;
 
-
-                    datas.Add(data);
-                    transactionIds.Add(transactionId);
-
-
-
+                    callbackDataItems.Add(callbackData);
                 }
                 else
                 {
@@ -143,7 +138,7 @@
 
             try
             {
-                // Begin reading more stream data.
+                // Begin asynchronous read of more stream data.
                 _ = stream.BeginRead(
                     state.AcceptReadBuffer,
                     state.AcceptReadBufferSize,
@@ -154,16 +149,27 @@
             catch
             {
                 // Assume the socket has closed.
+                return;
             }
 
-            for (int i = 0; i < datas.Count; i++)
+            // Execute the message handler callbacks.
+
+            foreach (var callbackData in callbackDataItems)
             {
-                // Process the message
-                state.HandleMessageCallback(
-                    datas[i], 
-                    state.Stream, 
-                    transactionIds[i]);
+                try
+                {
+                    state.HandleMessageCallback(
+                        callbackData.Data,
+                        state.Stream,
+                        callbackData.TransactionId);
+                }
+                catch (Exception e)
+                {
+                    state.Logger.Warning($"Exception thrown in TCP message callback: e={e}");
+                }
             }
+
+            callbackDataItems.Clear();
         }
 
         private class TcpStreamMessageReadingState
@@ -172,15 +178,21 @@
 
             public byte[] AcceptReadBuffer;
             public int AcceptReadBufferSize;
-            public int MessageSize;
-            public ushort TransactionId;
 
-            // Save delegate in state to avoid allocation per read.
+            public int CurrentMessageSize;
+            public ushort CurrentTransactionId;
+
+            // Save delegates in state to avoid allocation per read.
             public AsyncCallback ReadCallback;
-
             public HandleMessageCallback HandleMessageCallback;
 
             public ILogger Logger;
+        }
+
+        private struct MessageCallbackData
+        {
+            public byte[] Data;
+            public ushort TransactionId;
         }
     }
 }

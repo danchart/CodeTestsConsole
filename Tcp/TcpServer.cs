@@ -2,6 +2,7 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading.Tasks;
 
 namespace Networking.Core
 {
@@ -9,7 +10,7 @@ namespace Networking.Core
     {
         public delegate byte[] ProcessRequestDelegate(byte[] requestData);
 
-        private ProcessRequestDelegate ProcessRequestAsyncCallback;
+        private ProcessRequestDelegate ProcessRequestCallback;
 
         private bool _stop;
 
@@ -30,13 +31,13 @@ namespace Networking.Core
             this._listener = new TcpSocketListener(
                 logger,
                 clientCapacity: clientCapacity,
-                maxPacketSize: maxPacketSize,
-                packetQueueCapacity: packetQueueDepth);
+                maxMessageSize: maxPacketSize,
+                messageQueueCapacity: packetQueueDepth);
 
             this._stop = true;
         }
 
-        public void Start(IPEndPoint endPoint, ProcessRequestDelegate processAsync)
+        public void Start(IPEndPoint endPoint, ProcessRequestDelegate processRequestCallback)
         {
             if (!this._stop)
             {
@@ -45,7 +46,7 @@ namespace Networking.Core
 
             this._stop = false;
 
-            this.ProcessRequestAsyncCallback = processAsync;
+            this.ProcessRequestCallback = processRequestCallback;
             this._listener.Start(endPoint, this.HandleMessageCallback);
         }
 
@@ -56,9 +57,9 @@ namespace Networking.Core
             this._listener.Stop();
         }
 
-        private void HandleMessageCallback(byte[] requestData, NetworkStream stream, ushort transactionId)
+        private async void HandleMessageCallback(byte[] requestData, NetworkStream stream, ushort transactionId)
         {
-            var responseData = this.ProcessRequestAsyncCallback(requestData);
+            var responseData = this.ProcessRequestCallback(requestData);
 
             try
             {

@@ -16,6 +16,11 @@
         /// </summary>
         public int TimeoutInMilliseconds = 30000;
 
+        /// <summary>
+        /// Maximum number of concurrent transactions (SendAsync's).
+        /// </summary>
+        public int MaximumTransactionCount = 1024;
+
         private ushort _nextTransactionId = 0;
 
         private NetworkStream _stream;
@@ -39,6 +44,13 @@
 
         public TcpSocketClient(ILogger logger, int maxPacketSize, int packetQueueCapacity)
         {
+            packetQueueCapacity = 10;
+
+            if (packetQueueCapacity > MaximumTransactionCount)
+            {
+                throw new ArgumentException($"Cannot exceed maximum value of {MaximumTransactionCount}", nameof(packetQueueCapacity));
+            }
+
             this._client = new TcpClient(AddressFamily.InterNetworkV6);
 
             this._tcpReceiver = new TcpStreamMessageReader(logger, maxPacketSize, packetQueueCapacity);
@@ -94,8 +106,15 @@
                 {
                     if (this._requestAsyncStateCount == this._requestAsyncStates.Length)
                     {
-                        Array.Resize(ref this._requestAsyncStates, 2 * this._requestAsyncStateCount);
-                        Array.Resize(ref this._freeRequestAsyncStateIndices, 2 * this._requestAsyncStateCount);
+                        if (this._requestAsyncStateCount == MaximumTransactionCount)
+                        {
+                            throw new InvalidOperationException($"Exceeded maximum transaction count: {nameof(MaximumTransactionCount)}={MaximumTransactionCount}");
+                        }
+
+                        var size = Math.Min(2 * this._requestAsyncStateCount, MaximumTransactionCount);
+
+                        Array.Resize(ref this._requestAsyncStates, size);
+                        Array.Resize(ref this._freeRequestAsyncStateIndices, size);
                     }
 
                     index = this._requestAsyncStateCount++;
@@ -147,6 +166,8 @@
 
         private void OnSendAsyncCancellation(object obj)
         {
+            TaskCompletionSource<TcpResponseMessage> tcs = null;
+
             lock (_stateLock)
             {
                 ushort transactionId = (ushort)obj;
@@ -161,24 +182,26 @@
 
                     ref var state = ref this._requestAsyncStates[index];
 
-                    var tcs = state.Tcs;
+                    tcs = state.Tcs;
 
                     state.Tcs = null; // for GC
 
-                    if (!tcs.Task.IsCompleted)
-                    {
-                        tcs.TrySetCanceled();
-
-                        // Dispose CTS
-                        state.CancellationTokenSource.Dispose();
-                        state.CancellationTokenSource = null; // for GC
-                    }
+                    // Dispose CTS
+                    state.CancellationTokenSource.Dispose();
+                    state.CancellationTokenSource = null; // for GC
                 }
+            }
+
+            if (tcs != null && !tcs.Task.IsCompleted)
+            {
+                tcs.TrySetCanceled();
             }
         }
 
         private void HandleResponseMessage(byte[] data, NetworkStream stream, ushort transactionId)
         {
+            TaskCompletionSource<TcpResponseMessage> tcs = null;
+
             lock (_stateLock)
             {
                 if (this._idToRequestAsyncStateIndex.ContainsKey(transactionId))
@@ -191,30 +214,26 @@
 
                     ref var state = ref this._requestAsyncStates[index];
 
-                    var tcs = state.Tcs;
+                    tcs = state.Tcs;
 
                     state.Tcs = null; // for GC
 
-                    if (!tcs.Task.IsCanceled)
-                    {
-                        // Dispose CTS
-                        state.CancellationTokenSource.Dispose();
-                        state.CancellationTokenSource = null; // for GC
+                    // Dispose CTS
+                    state.CancellationTokenSource.Dispose();
+                    state.CancellationTokenSource = null; // for GC
+                }
+            }
 
-                        // Successfully received response before cancellation.
-                        tcs.SetResult(
-                            new TcpResponseMessage
-                            {
-                                Data = data,
-                                Offset = 0,
-                                Size = data.Length
-                            });
-                    }
-                }
-                else
-                {
-                    Debug.Assert(false);
-                }
+            if (tcs != null && !tcs.Task.IsCanceled)
+            {
+                // Successfully received response before cancellation.
+                tcs.SetResult(
+                    new TcpResponseMessage
+                    {
+                        Data = data,
+                        Offset = 0,
+                        Size = data.Length
+                    });
             }
         }
 

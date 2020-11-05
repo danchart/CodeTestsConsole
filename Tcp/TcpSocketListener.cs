@@ -18,20 +18,28 @@
 
         private readonly ILogger _logger;
 
-        private readonly int MaxPacketSize, PacketQueueCapacity;
+        private readonly int 
+            MaxMessageSize,
+            MessageQueueCapacity;
 
-        public TcpSocketListener(ILogger logger, int clientCapacity, int maxPacketSize, int packetQueueCapacity)
+        public TcpSocketListener(
+            ILogger logger, 
+            int clientCapacity, 
+            int maxMessageSize, 
+            int messageQueueCapacity)
         {
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             this.Clients = new TcpClients(logger, clientCapacity);
-            this._tcpReceiver = new TcpStreamMessageReader(logger, maxPacketSize, packetQueueCapacity);
+            this._tcpReceiver = new TcpStreamMessageReader(logger, maxMessageSize, messageQueueCapacity);
 
-            this.MaxPacketSize = maxPacketSize;
-            this.PacketQueueCapacity = packetQueueCapacity;
+            this.MaxMessageSize = maxMessageSize;
+            this.MessageQueueCapacity = messageQueueCapacity;
         }
 
-        public void Start(IPEndPoint ipEndPoint, TcpStreamMessageReader.HandleMessageCallback handleMessageCallback)
+        public void Start(
+            IPEndPoint ipEndPoint, 
+            TcpStreamMessageReader.HandleMessageCallback handleMessageCallbackAsync)
         {
             this._listener = new TcpListener(ipEndPoint);
 
@@ -45,14 +53,14 @@
                 AcceptCallback,
                 new AcceptClientState
                 {
-                    HandleMessageCallback = handleMessageCallback,
+                    HandleMessageCallbackAsync = handleMessageCallbackAsync,
 
                     Listener = this._listener,
                     StreamMessageReader = this._tcpReceiver,
                     Clients = this.Clients,
 
-                    MaxPacketSize = this.MaxPacketSize,
-                    PacketQueueCapacity = this.PacketQueueCapacity,
+                    MaxMessageSize = this.MaxMessageSize,
+                    MessageQueueCapacity = this.MessageQueueCapacity,
 
                     Logger = this._logger,
                 });
@@ -82,8 +90,8 @@
             NetworkStream stream = client.GetStream();
             TcpReceiveBuffer buffer = 
                 new TcpReceiveBuffer(
-                    maxPacketSize: state.MaxPacketSize, 
-                    packetQueueCapacity: state.PacketQueueCapacity);
+                    maxPacketSize: state.MaxMessageSize, 
+                    packetQueueCapacity: state.MessageQueueCapacity);
 
             var clientData = new TcpClientData
             {
@@ -92,7 +100,7 @@
             };
             state.Clients.Add(clientData);
 
-            state.StreamMessageReader.Start(stream, state.HandleMessageCallback);
+            state.StreamMessageReader.Start(stream, state.HandleMessageCallbackAsync);
 
             state.Logger.Info($"Connected. remoteEp={client.Client.RemoteEndPoint}");
 
@@ -301,7 +309,7 @@
 
         private sealed class AcceptClientState
         {
-            public TcpStreamMessageReader.HandleMessageCallback HandleMessageCallback;
+            public TcpStreamMessageReader.HandleMessageCallback HandleMessageCallbackAsync;
 
             public TcpListener Listener;
             public TcpStreamMessageReader StreamMessageReader;
@@ -310,8 +318,8 @@
             public IClock Clock;
             public ILogger Logger;
 
-            public int MaxPacketSize;
-            public int PacketQueueCapacity;
+            public int MaxMessageSize;
+            public int MessageQueueCapacity;
         }
     }
 }

@@ -68,38 +68,27 @@ namespace Networking.Core
         //    this._stop = true;
         //}
 
-        private async static Task ProcessDelegateAsync(object state)
+        private async static Task ProcessDelegateAsync(ProcessState state)
         {
-            var processState = (ProcessState)state;
-
-            var responseData = await processState.CallbackAsync(processState.Data).ConfigureAwait(false);
+            var responseData = await state.CallbackAsync(state.Data).ConfigureAwait(false);
 
             if (responseData != null)
             {
-                var stream = processState.RemoteClient.GetStream();
+                var stream = state.RemoteClient.GetStream();
 
                 try
                 {
-                    stream.WriteFrame(transactionId: processState.TransactionId, data: responseData, offset: 0, count: (ushort)responseData.Length);
+                    stream.WriteFrame(transactionId: state.TransactionId, data: responseData, offset: 0, count: (ushort)responseData.Length);
                 }
                 catch (Exception e)
                 {
-                    processState.Logger.Verbose($"Failed to write to client: e={e}");
+                    state.Logger.Verbose($"Failed to write to client: e={e}");
                 }
             }
             else
             {
-                processState.Logger.Warning($"Failed to receive response data.");
+                state.Logger.Warning($"Failed to receive response data.");
             }
-        }
-
-        private class ProcessState
-        {
-            public ProcessAsync CallbackAsync;
-            public byte[] Data;
-            public TcpClient RemoteClient;
-            public ushort TransactionId;
-            public ILogger Logger;
         }
 
         private void Run()
@@ -110,6 +99,7 @@ namespace Networking.Core
         private void RunCore(CancellationToken token)
         {
             Task[] tasks = new Task[MaxConcurrentRequests];
+            ProcessState[] states = new ProcessState[MaxConcurrentRequests];
             int taskCount = 0;
 
             while (!token.IsCancellationRequested)
@@ -148,16 +138,14 @@ namespace Networking.Core
                                 }
                             }
 
-                            tasks[taskCount++] =
-                                ProcessDelegateAsync(
-                                    new ProcessState
-                                    {
-                                        CallbackAsync = ProcessAsyncCallback,
-                                        Data = dataCopy,
-                                        RemoteClient = remoteClient,
-                                        TransactionId = transactionId,
-                                        Logger = _logger,
-                                    });
+                            ref var state = ref states[taskCount];
+                            state.CallbackAsync = ProcessAsyncCallback;
+                            state.Data = dataCopy;
+                            state.RemoteClient = remoteClient;
+                            state.TransactionId = transactionId;
+                            state.Logger = _logger;
+
+                            tasks[taskCount++] = ProcessDelegateAsync(state);
                         }
                     }
                 }
@@ -215,6 +203,15 @@ namespace Networking.Core
                     _pendingAddBuffers.Add(e.ReceiveBuffer);
                 }
             }
+        }
+
+        private struct ProcessState
+        {
+            public ProcessAsync CallbackAsync;
+            public byte[] Data;
+            public TcpClient RemoteClient;
+            public ushort TransactionId;
+            public ILogger Logger;
         }
     }
 }

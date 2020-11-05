@@ -64,14 +64,7 @@
             _client.Connect(ipAddresses, port);
             _stream = _client.GetStream();
 
-            this._tcpReceiver.Start(
-                this._stream,
-                new TcpClientData
-                {
-                    Client = this._client,
-                    Stream = this._stream,
-                    ReceiveBuffer = this._receiveBuffer,
-                });
+            this._tcpReceiver.Start(this._stream, this._receiveBuffer);
         }
 
         public void Disconnect()

@@ -83,15 +83,14 @@
                     maxPacketSize: state.MaxPacketSize, 
                     packetQueueCapacity: state.PacketQueueCapacity);
 
-            var clientData = new TcpClientData
+            state.Clients.Add(new TcpClientData
             {
                 Client = client,
                 Stream = stream,
                 ReceiveBuffer = buffer,
-            };
-            state.Clients.Add(clientData);
+            });
 
-            state.StreamMessageReader.Start(stream, clientData);
+            state.StreamMessageReader.Start(stream, buffer);
 
             state.Logger.Info($"Connected. remoteEp={client.Client.RemoteEndPoint}");
 
@@ -169,7 +168,7 @@
                     {
                         if (!this._clients[i].Client.Client.Connected)
                         {
-                            this._logger.Verbose($"Cleaning up disconnect client: index={i}");
+                            this._logger.Verbose($"Cleaning up disconnected client: index={i}");
 
                             this._clients[i].ClearAndClose();
 

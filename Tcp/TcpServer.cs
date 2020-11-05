@@ -10,9 +10,7 @@ namespace Networking.Core
 {
     public sealed class TcpServer
     {
-        public delegate Task<byte[]> ProcessAsync(byte[] data, CancellationToken token);
-
-        public ProcessAsync ProcessRequestAsyncCallback;
+        public delegate Task<byte[]> ProcessAsync(byte[] data, CancellationToken token);        
 
         private bool _stop;
         private CancellationTokenSource _cts;
@@ -29,7 +27,12 @@ namespace Networking.Core
         private readonly List<TcpReceiveBuffer> _pendingRemoveBuffers = new List<TcpReceiveBuffer>();
         private int _lockCount = 0;
 
-        private readonly int MaxConcurrentRequests;
+        private ProcessAsync ProcessRequestAsyncCallback;
+
+        private int _messageCount = 0;
+        private AutoResetEvent _waitHandle = new AutoResetEvent(false);
+
+        private readonly int _maxConcurrentRequests;
 
         public TcpServer(
             ILogger logger,
@@ -54,15 +57,19 @@ namespace Networking.Core
 
             // Default to the minimum available worker threads (min threads seems to == core count).
             ThreadPool.GetMinThreads(out int workerThreads, out int completionPortThreads);
-            MaxConcurrentRequests = workerThreads;
+            _maxConcurrentRequests = workerThreads;
         }
 
-        public void Start(IPEndPoint endPoint)
+        public void Start(
+            IPEndPoint endPoint, 
+            ProcessAsync processRequestAsync)
         {
             if (!this._stop)
             {
                 throw new InvalidOperationException($"{nameof(TcpServer)} already started.");
             }
+
+            this.ProcessRequestAsyncCallback = processRequestAsync ?? throw new ArgumentNullException(nameof(processRequestAsync));
 
             this._stop = false;
 
@@ -76,6 +83,9 @@ namespace Networking.Core
 
         public void Stop()
         {
+            // Signal run loop if blocked.
+            this._waitHandle.Set();
+
             this._stop = true;
             this._cts.Cancel();
         }
@@ -115,12 +125,18 @@ namespace Networking.Core
 
         private void RunCore(CancellationToken token)
         {
-            Task[] tasks = new Task[MaxConcurrentRequests];
-            ProcessState[] states = new ProcessState[MaxConcurrentRequests];
+            Task[] tasks = new Task[_maxConcurrentRequests];
+            ProcessState[] states = new ProcessState[_maxConcurrentRequests];
             int taskCount = 0;
 
             while (!this._stop)
             {
+                if (this._messageCount == 0)
+                {
+                    // Wait for messages.
+                    this._waitHandle.WaitOne();
+                }
+
                 Lock();
 
                 try
@@ -142,6 +158,8 @@ namespace Networking.Core
 
                                 buffer.GetState(out NetworkStream stream, out ushort transactionId);
                                 buffer.NextRead();
+
+                                Interlocked.Decrement(ref this._messageCount);
 
                                 if (taskCount == tasks.Length)
                                 {
@@ -165,7 +183,7 @@ namespace Networking.Core
 
                                 ref var state = ref states[taskCount];
                                 state.StreamWriteLock = this._streamWriteLock;
-                                state.RequestCallbackAsync = ProcessRequestAsyncCallback;
+                                state.RequestCallbackAsync = this.ProcessRequestAsyncCallback;
                                 state.Data = dataCopy;
                                 state.Stream = stream;
                                 state.TransactionId = transactionId;
@@ -173,7 +191,7 @@ namespace Networking.Core
 
                                 tasks[taskCount++] = HandleRequestAsync(state, token);
                             }
-                        } while (++readCount < MaxConcurrentRequests); // Limit request throughput per client 
+                        } while (++readCount < this._maxConcurrentRequests); // Limit request throughput per client 
                     }
                 }
                 finally
@@ -207,6 +225,8 @@ namespace Networking.Core
                     foreach (var receiveBuffer in this._pendingAddBuffers)
                     {
                         _receiveBuffers.Add(receiveBuffer);
+
+                        receiveBuffer.OnWriteComplete = OnBeforeWriteComplete;
                     }
 
                     this._pendingAddBuffers.Clear();
@@ -242,8 +262,23 @@ namespace Networking.Core
                 else
                 {
                     _receiveBuffers.Add(e.ReceiveBuffer);
+
+                    e.ReceiveBuffer.OnWriteComplete = OnBeforeWriteComplete;
                 }
             }
+        }
+
+        private bool OnBeforeWriteComplete(
+            byte[] data,
+            int offset,
+            int size,
+            NetworkStream stream,
+            ushort transactionId)
+        {
+            Interlocked.Increment(ref this._messageCount);
+            this._waitHandle.Set();
+
+            return false;
         }
 
         private struct ProcessState

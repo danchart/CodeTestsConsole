@@ -9,26 +9,27 @@
     {
         public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // Frame size + transaction id
 
-        private readonly int MaxPacketSize;
-        private readonly int MaxPacketCapacity;
+        private readonly int _maxMessageSize;
+        private readonly int _maxMessageQueueSize;
 
         private readonly ILogger _logger;
 
-        public TcpStreamMessageReader(ILogger logger, int maxPacketSize, int maxPacketCapacity)
+        public TcpStreamMessageReader(ILogger logger, int maxMessageSize, int maxMessageQueueSize)
         {
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            this.MaxPacketSize = maxPacketSize;
-            this.MaxPacketCapacity = maxPacketCapacity;
+            this._maxMessageSize = maxMessageSize;
+            this._maxMessageQueueSize = maxMessageQueueSize;
         }
 
-        public void Start(NetworkStream stream, TcpClientData clientData)
+        public void Start(NetworkStream stream, TcpReceiveBuffer receiveBuffer)
         {
             var state = new TcpStreamMessageReadingState
             {
-                ClientData = clientData,
+                Stream = stream,
+                ReceiveBuffer = receiveBuffer,
 
-                AcceptReadBuffer = new byte[this.MaxPacketSize * this.MaxPacketCapacity],
+                AcceptReadBuffer = new byte[this._maxMessageSize * this._maxMessageQueueSize],
                 AcceptReadBufferSize = 0,
                 MessageSize = 0,
 
@@ -49,7 +50,7 @@
         {
             TcpStreamMessageReadingState state = (TcpStreamMessageReadingState)ar.AsyncState;
 
-            NetworkStream stream = state.ClientData.Stream;
+            NetworkStream stream = state.Stream;
 
             if (stream == null || !stream.CanRead)
             {
@@ -60,16 +61,18 @@
             try
             {
                 bytesRead = stream.EndRead(ar);
-
-                if (bytesRead == 0)
-                {
-                    stream.Close();
-                    state.ClientData.Client.Close();
-                }
             }
             catch
             {
                 // Assume the socket has closed.
+                return;
+            }
+
+            if (bytesRead == 0)
+            {
+                // Socket has closed.
+                stream.Close(); // Close the stream for immediate disconnection.
+
                 return;
             }
 
@@ -91,18 +94,18 @@
                 {
                     // Complete message data available.
 
-                    if (state.ClientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size))
+                    if (state.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size))
                     {
                         Debug.Assert(state.MessageSize <= size);
                         
                         // Copy data minus frame preamble
                         Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, offset, state.MessageSize);
 
-                        state.ClientData.ReceiveBuffer.NextWrite(state.MessageSize, state.ClientData.Stream, state.TransactionId);
+                        state.ReceiveBuffer.NextWrite(state.MessageSize, state.Stream, state.TransactionId);
                     }
                     else
                     {
-                        state.Logger.Error($"Out of receive buffer space: localEp={state.ClientData.Client.Client.LocalEndPoint}, capacity={state.ClientData.ReceiveBuffer.PacketCapacity}");
+                        state.Logger.Error($"Out of receive buffer space: capacity={state.ReceiveBuffer.PacketCapacity}");
                     }
 
                     // Shift accept read buffer to the next frame, if any.
@@ -144,7 +147,8 @@
 
         private class TcpStreamMessageReadingState
         {
-            public TcpClientData ClientData;
+            public NetworkStream Stream;
+            public TcpReceiveBuffer ReceiveBuffer;
 
             public byte[] AcceptReadBuffer;
             public int AcceptReadBufferSize;

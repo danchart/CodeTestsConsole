@@ -7,7 +7,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace CodeTestsConsole
@@ -23,10 +22,10 @@ namespace CodeTestsConsole
             RunAsync().Wait();
         }
 
-        private static async Task<byte[]> ProcessAsync(byte[] data, CancellationToken token)
+        private static byte[] HandleMessageCallback(byte[] requestData)
         {
             var requestMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(
-                new ReadOnlyMemory<byte>(data, 0, data.Length));
+                new ReadOnlyMemory<byte>(requestData, 0, requestData.Length));
 
             var responseMessage = new SampleDataMsgPack
             {
@@ -56,13 +55,13 @@ namespace CodeTestsConsole
             var ipAddress = addressList.First();
             var serverEndpoint = new IPEndPoint(ipAddress, 27005);
 
-            //Processor = new ServerProcessor(Logger, capacity: 2);
+            var server = new TcpServer(
+                Logger, 
+                clientCapacity: 2, 
+                maxPacketSize: MaxPacketSize, 
+                packetQueueDepth: PacketQueueCapacity);
 
-            var server = new TcpServer(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueDepth: PacketQueueCapacity);
-
-            server.ProcessRequestAsyncCallback = ProcessAsync;
-
-            server.Start(serverEndpoint);
+            server.Start(serverEndpoint, HandleMessageCallback);
 
             // TCP clients connecto to server.
 
@@ -130,7 +129,7 @@ namespace CodeTestsConsole
 
                         if (!taskSendAll.IsCompleted)
                         {
-                            Logger.Error($"Failed to complete all sends.");
+                            Logger.Error($"Failed to complete all sends: count={tasks.Count()}, failedCount={tasks.Where(x => !x.IsCompleted).Count()}");
 
                             tasks.Clear();
                             clientIndices.Clear();
@@ -167,171 +166,16 @@ namespace CodeTestsConsole
             //    Logger.Info($"Client {i}: {(Processor.ClientCounts.ContainsKey(i) ? Processor.ClientCounts[i] : 0)}");
             //}
 
+            // Disconnect clients
 
             for (int i = 0; i < clients.Length; i++)
             {
                 clients[i].Disconnect();
             }
 
-
+            // Stop server
             server.Stop();
-
-            //Processor.Stop = true;
-
-            //while (thread.ThreadState != ThreadState.Stopped) { }
-
-#if NEVER
-
-
-            var bytesSend = Encoding.ASCII.GetBytes("Hello, world");
-            client.Send(bytesSend, 0, bytesSend.Length);
-
-            WaitForReceive(serverBuffer, 1, server);
-
-            Debug.Assert(1 == serverBuffer.Count);
-
-            byte[] data = new byte[256];
-            int offset, count;
-            serverBuffer.GetReadData(out data, out offset, out count);
-
-            var receivedStr = Encoding.ASCII.GetString(data, offset, count);
-            Debug.Assert("Hello, world" == receivedStr);
-
-            serverBuffer.GetClient(out TcpClient tcpClient);
-
-            var stream = tcpClient.GetStream();
-
-            var bytesSend2 = Encoding.ASCII.GetBytes("I'm server");
-            stream.Write(bytesSend2, 0, bytesSend2.Length);
-
-            {
-                var bs = Encoding.ASCII.GetBytes("This is packet # 2");
-                stream.Write(bs, 0, bs.Length);
-            }
-
-            Thread.Sleep(100);
-
-            client.Read(data, 0, data.Length, out count);
-
-            var receivedStr2 = Encoding.ASCII.GetString(data, offset, count);
-
-            Debug.Assert("I'm server" == receivedStr2);
-#endif
-            //server.Stop();
-
-            //Thread.Sleep(250);
-
-            //int iii = 0;
         }
-#if MOTHBALL
-        private static void Clients_OnClientRemoved(object sender, TcpSocketListener.TcpClientsEventArgs e)
-        {
-            Processor.Remove(e.ReceiveBuffer);
-        }
-
-        private static void Clients_OnClientAdded(object sender, TcpSocketListener.TcpClientsEventArgs e)
-        {
-            Processor.Add(e.ReceiveBuffer);
-        }
-
-        internal class ServerProcessor
-        {
-            public bool Stop = false;
-
-            public readonly Dictionary<int, int> ClientCounts = new Dictionary<int, int>();
-
-            private readonly List<TcpReceiveBuffer> Buffers;
-            private readonly ILogger _logger;
-
-            private readonly object _lock = new object();
-
-            public ServerProcessor(ILogger logger, int capacity)
-            {
-                _logger = logger;
-
-                Buffers = new List<TcpReceiveBuffer>(capacity);
-            }
-
-            public void Add(TcpReceiveBuffer buffer)
-            {
-                lock (_lock)
-                {
-                    Buffers.Add(buffer);
-                }
-            }
-
-            public void Remove(TcpReceiveBuffer buffer)
-            {
-                lock (_lock)
-                {
-                    Buffers.Remove(buffer);
-                }
-            }
-
-            public void Run()
-            {
-                while (!Stop)
-                {
-                    lock (_lock)
-                    {
-                        foreach (var buffer in Buffers)
-                        {
-                            if (buffer.GetReadData(out byte[] data, out int offset, out int count))
-                            {
-                                var receivedMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(new ReadOnlyMemory<byte>(data, offset, count));
-
-                                if (!ClientCounts.ContainsKey(receivedMessage.ClientId))
-                                {
-                                    ClientCounts[receivedMessage.ClientId] = 0;
-                                }
-
-                                ClientCounts[receivedMessage.ClientId] = ClientCounts[receivedMessage.ClientId] + 1;
-
-                                buffer.GetState(out TcpClient remoteClient, out ushort transactionId);
-
-                                buffer.NextRead(closeConnection: false);
-
-                                if (!remoteClient.Connected)
-                                {
-                                    continue;
-                                }
-
-
-                                receivedMessage.TransactionId = transactionId;
-
-#if PRINT_DATA
-                                _logger.Info($"Server received: {receivedMessage}");
-#endif //PRINT_DATA
-
-
-                                var stream = remoteClient.GetStream();
-
-                                var sendMessage = new SampleDataMsgPack
-                                {
-                                    ClientId = receivedMessage.ClientId,
-                                    TransactionId = transactionId,
-                                    MyInt = receivedMessage.MyInt,
-                                    MyString = "The quick brown fox jumped over the lazy dogs.",
-                                };
-
-                                var sendMessageBytes = MessagePackSerializer.Serialize(sendMessage);
-
-                                try
-                                {
-                                    stream.WriteFrame(transactionId: transactionId, data: sendMessageBytes, offset: 0, count: (ushort)sendMessageBytes.Length);
-                                }
-                                catch (Exception e)
-                                {
-                                    Logger.Verbose($"Failed to write to client: e={e}");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-#endif
-
 
         [MessagePackObject]
         public class SampleDataMsgPack

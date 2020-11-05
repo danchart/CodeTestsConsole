@@ -2,6 +2,7 @@
 {
     using Common.Core;
     using System;
+    using System.Collections.Generic;
     using System.Net.Sockets;
 
     internal sealed class TcpStreamMessageReader
@@ -92,6 +93,9 @@
 
             state.AcceptReadBufferSize += bytesRead;
 
+            List<byte[]> datas = new List<byte[]>();
+            List<ushort> transactionIds = new List<ushort>();
+
             // We need at least the frame header data to do anything.
             while (state.AcceptReadBufferSize >= FrameHeaderSizeByteCount)
             {
@@ -108,15 +112,11 @@
                 {
                     // Complete message data available.
 
-                    if (state.HandleMessageCallback != null)
-                    {
-                        var data = new byte[state.MessageSize];
+                    // Copy data minus frame preamble
+                    byte[] data = new byte[state.MessageSize];
+                    Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, 0, state.MessageSize);
 
-                        // Copy data minus frame preamble
-                        Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, 0, state.MessageSize);
-
-                        state.HandleMessageCallback(data, state.Stream, state.TransactionId);
-                    }
+                    var transactionId = state.TransactionId;
 
                     // Shift accept read buffer to the next frame, if any.
                     for (int i = FrameHeaderSizeByteCount + state.MessageSize, j = 0; i < state.AcceptReadBufferSize; i++, j++)
@@ -126,6 +126,13 @@
 
                     state.AcceptReadBufferSize -= state.MessageSize + FrameHeaderSizeByteCount;
                     state.MessageSize = 0;
+
+
+                    datas.Add(data);
+                    transactionIds.Add(transactionId);
+
+
+
                 }
                 else
                 {
@@ -134,14 +141,9 @@
                 }
             }
 
-            if (!stream.CanRead)
-            {
-                return;
-            }
-
             try
             {
-                // Begin waiting for more stream data.
+                // Begin reading more stream data.
                 _ = stream.BeginRead(
                     state.AcceptReadBuffer,
                     state.AcceptReadBufferSize,
@@ -152,6 +154,15 @@
             catch
             {
                 // Assume the socket has closed.
+            }
+
+            for (int i = 0; i < datas.Count; i++)
+            {
+                // Process the message
+                state.HandleMessageCallback(
+                    datas[i], 
+                    state.Stream, 
+                    transactionIds[i]);
             }
         }
 

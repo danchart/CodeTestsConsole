@@ -7,8 +7,6 @@
 
     internal sealed class TcpSocketListener
     {
-        public delegate void HandleMessageCallback(byte[] data, NetworkStream stream, ushort transactionId);
-
         public readonly TcpClients Clients;
 
         private TcpListener _listener;
@@ -33,7 +31,7 @@
             this.PacketQueueCapacity = packetQueueCapacity;
         }
 
-        public void Start(IPEndPoint ipEndPoint, HandleMessageCallback handleMessageCallback)
+        public void Start(IPEndPoint ipEndPoint, TcpStreamMessageReader.HandleMessageCallback handleMessageCallback)
         {
             this._listener = new TcpListener(ipEndPoint);
 
@@ -94,7 +92,7 @@
             };
             state.Clients.Add(clientData);
 
-            state.StreamMessageReader.Start(stream, state.);
+            state.StreamMessageReader.Start(stream, state.HandleMessageCallback);
 
             state.Logger.Info($"Connected. remoteEp={client.Client.RemoteEndPoint}");
 
@@ -110,16 +108,6 @@
             {
                 // Assume the socket has closed.
             }
-        }
-
-        public class TcpClientsEventArgs : EventArgs
-        {
-            public TcpClientsEventArgs(TcpReceiveBuffer receiveBuffer)
-            {
-                this.ReceiveBuffer = receiveBuffer;
-            }
-
-            public TcpReceiveBuffer ReceiveBuffer { get; private set; }
         }
 
         public sealed class TcpClients
@@ -156,9 +144,6 @@
             }
 
             public int Count => this._count;
-
-            public event EventHandler<TcpClientsEventArgs> OnClientAdded;
-            public event EventHandler<TcpClientsEventArgs> OnClientRemoved;
 
             public TcpClientData Get(int index) => this._clients[index];
 
@@ -297,16 +282,10 @@
                 }
 
                 this._clients[this._count++] = clientData;
-
-                // Raise add event
-                this.OnClientAdded?.Invoke(this, new TcpClientsEventArgs(clientData.ReceiveBuffer));
             }
 
             private void RemoveAndCloseLockFree(int index)
             {
-                // Raise remove event
-                this.OnClientRemoved?.Invoke(this, new TcpClientsEventArgs(this._clients[index].ReceiveBuffer));
-
                 this._clients[index].ClearAndClose();
 
                 if (this._count > 1)
@@ -322,7 +301,7 @@
 
         private sealed class AcceptClientState
         {
-            public HandleMessageCallback HandleMessageCallback;
+            public TcpStreamMessageReader.HandleMessageCallback HandleMessageCallback;
 
             public TcpListener Listener;
             public TcpStreamMessageReader StreamMessageReader;

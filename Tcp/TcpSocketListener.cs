@@ -7,6 +7,8 @@
 
     internal sealed class TcpSocketListener
     {
+        public delegate void HandleMessageCallback(byte[] data, NetworkStream stream, ushort transactionId);
+
         public readonly TcpClients Clients;
 
         private TcpListener _listener;
@@ -31,7 +33,7 @@
             this.PacketQueueCapacity = packetQueueCapacity;
         }
 
-        public void Start(IPEndPoint ipEndPoint)
+        public void Start(IPEndPoint ipEndPoint, HandleMessageCallback handleMessageCallback)
         {
             this._listener = new TcpListener(ipEndPoint);
 
@@ -45,6 +47,8 @@
                 AcceptCallback,
                 new AcceptClientState
                 {
+                    HandleMessageCallback = handleMessageCallback,
+
                     Listener = this._listener,
                     StreamMessageReader = this._tcpReceiver,
                     Clients = this.Clients,
@@ -87,11 +91,10 @@
             {
                 Client = client,
                 Stream = stream,
-                ReceiveBuffer = buffer,
             };
             state.Clients.Add(clientData);
 
-            state.StreamMessageReader.Start(stream, clientData);
+            state.StreamMessageReader.Start(stream, state.);
 
             state.Logger.Info($"Connected. remoteEp={client.Client.RemoteEndPoint}");
 
@@ -319,6 +322,8 @@
 
         private sealed class AcceptClientState
         {
+            public HandleMessageCallback HandleMessageCallback;
+
             public TcpListener Listener;
             public TcpStreamMessageReader StreamMessageReader;
             public TcpClients Clients;

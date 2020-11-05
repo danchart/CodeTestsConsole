@@ -2,37 +2,52 @@
 {
     using Common.Core;
     using System;
-    using System.Diagnostics;
     using System.Net.Sockets;
 
     internal sealed class TcpStreamMessageReader
     {
+        public delegate void HandleMessageCallback(byte[] data, NetworkStream stream, ushort transactionId);
+
+        public HandleMessageCallback HandleMessage;
+
         public const int FrameHeaderSizeByteCount = sizeof(ushort) + sizeof(ushort); // Frame size + transaction id
+
+        private bool _started;
 
         private readonly int MaxPacketSize;
         private readonly int MaxPacketCapacity;
 
         private readonly ILogger _logger;
 
-        public TcpStreamMessageReader(ILogger logger, int maxPacketSize, int maxPacketCapacity)
+        public TcpStreamMessageReader(ILogger logger, int maxMessageSize, int maxMessageCapacity)
         {
             this._logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            this.MaxPacketSize = maxPacketSize;
-            this.MaxPacketCapacity = maxPacketCapacity;
+            this.MaxPacketSize = maxMessageSize;
+            this.MaxPacketCapacity = maxMessageCapacity;
+
+            this._started = false;
         }
 
-        public void Start(NetworkStream stream, TcpClientData clientData)
+        public void Start(
+            NetworkStream stream, 
+            HandleMessageCallback handleMessageCallback)
         {
+            if (this._started)
+            {
+                throw new InvalidOperationException($"{nameof(TcpStreamMessageReader)} has already been started.");
+            }
+
             var state = new TcpStreamMessageReadingState
             {
-                ClientData = clientData,
+                Stream = stream,
 
                 AcceptReadBuffer = new byte[this.MaxPacketSize * this.MaxPacketCapacity],
                 AcceptReadBufferSize = 0,
                 MessageSize = 0,
 
                 ReadCallback = AcceptRead,
+                HandleMessageCallback = handleMessageCallback,
 
                 Logger = this._logger,
             };
@@ -49,7 +64,7 @@
         {
             TcpStreamMessageReadingState state = (TcpStreamMessageReadingState)ar.AsyncState;
 
-            NetworkStream stream = state.ClientData.Stream;
+            NetworkStream stream = state.Stream;
 
             if (stream == null || !stream.CanRead)
             {
@@ -63,8 +78,10 @@
 
                 if (bytesRead == 0)
                 {
+                    // Connection closed.
                     stream.Close();
-                    state.ClientData.Client.Close();
+
+                    return;
                 }
             }
             catch
@@ -91,18 +108,14 @@
                 {
                     // Complete message data available.
 
-                    if (state.ClientData.ReceiveBuffer.GetWriteData(out byte[] data, out int offset, out int size))
+                    if (state.HandleMessageCallback != null)
                     {
-                        Debug.Assert(state.MessageSize <= size);
-                        
-                        // Copy data minus frame preamble
-                        Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, offset, state.MessageSize);
+                        var data = new byte[state.MessageSize];
 
-                        state.ClientData.ReceiveBuffer.NextWrite(state.MessageSize, state.ClientData.Stream, state.TransactionId);
-                    }
-                    else
-                    {
-                        state.Logger.Error($"Out of receive buffer space: localEp={state.ClientData.Client.Client.LocalEndPoint}, capacity={state.ClientData.ReceiveBuffer.PacketCapacity}");
+                        // Copy data minus frame preamble
+                        Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, 0, state.MessageSize);
+
+                        state.HandleMessageCallback(data, state.Stream, state.TransactionId);
                     }
 
                     // Shift accept read buffer to the next frame, if any.
@@ -144,7 +157,7 @@
 
         private class TcpStreamMessageReadingState
         {
-            public TcpClientData ClientData;
+            public NetworkStream Stream;
 
             public byte[] AcceptReadBuffer;
             public int AcceptReadBufferSize;
@@ -153,6 +166,8 @@
 
             // Save delegate in state to avoid allocation per read.
             public AsyncCallback ReadCallback;
+
+            public HandleMessageCallback HandleMessageCallback;
 
             public ILogger Logger;
         }

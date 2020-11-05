@@ -1,4 +1,6 @@
-﻿using Common.Core;
+﻿#if MOTHBALL
+
+using Common.Core;
 using System;
 using System.Collections.Generic;
 using System.Net;
@@ -258,3 +260,4 @@ namespace Networking.Core
         }
     }
 }
+#endif

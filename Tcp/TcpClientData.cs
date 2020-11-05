@@ -6,7 +6,6 @@
     {
         public TcpClient Client;
         public NetworkStream Stream;
-        public TcpReceiveBuffer ReceiveBuffer;
 
         public void ClearAndClose()
         {
@@ -14,7 +13,6 @@
             Stream = null;
             Client.Close();
             Client = null;
-            ReceiveBuffer = null;
         }
     }
 }

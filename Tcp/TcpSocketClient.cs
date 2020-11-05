@@ -30,7 +30,6 @@
 
         private readonly TcpClient _client;
 
-        private readonly TcpReceiveBuffer _receiveBuffer;
         private readonly TcpStreamMessageReader _tcpReceiver;
 
         private readonly Action<object> OnCancelResponseTcs;
@@ -42,7 +41,6 @@
         {
             this._client = new TcpClient(AddressFamily.InterNetworkV6);
 
-            this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
             this._tcpReceiver = new TcpStreamMessageReader(logger, maxPacketSize, packetQueueCapacity);
 
             this._requestAsyncStates = new RequestAsyncState[packetQueueCapacity];
@@ -52,7 +50,6 @@
             this._requestAsyncStateCount = 0;
             this._freeRequestAsyncStateCount = 0;
 
-            this._receiveBuffer.OnWriteComplete = this.OnWriteComplete;
             this.OnCancelResponseTcs = OnSendAsyncCancellation;
 
             this._stateLock = new object();
@@ -66,12 +63,7 @@
 
             this._tcpReceiver.Start(
                 this._stream,
-                new TcpClientData
-                {
-                    Client = this._client,
-                    Stream = this._stream,
-                    ReceiveBuffer = this._receiveBuffer,
-                });
+                HandleResponseMessage);
         }
 
         public void Disconnect()
@@ -185,12 +177,7 @@
             }
         }
 
-        private bool OnWriteComplete(
-            byte[] data,
-            int offset,
-            int size,
-            NetworkStream stream,
-            ushort transactionId)
+        private void HandleResponseMessage(byte[] data, NetworkStream stream, ushort transactionId)
         {
             lock (_stateLock)
             {
@@ -214,28 +201,21 @@
                         state.CancellationTokenSource.Dispose();
                         state.CancellationTokenSource = null; // for GC
 
-                        var dataCopy = new byte[size];
-                        Array.Copy(data, offset, dataCopy, 0, size);
-
                         // Successfully received response before cancellation.
                         tcs.SetResult(
                             new TcpResponseMessage
                             {
-                                Data = dataCopy,
+                                Data = data,
                                 Offset = 0,
-                                Size = size
+                                Size = data.Length
                             });
                     }
-
-                    return true;
                 }
                 else
                 {
                     Debug.Assert(false);
                 }
             }
-
-            return false;
         }
 
         internal struct RequestAsyncState

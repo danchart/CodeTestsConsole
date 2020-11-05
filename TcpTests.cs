@@ -56,7 +56,7 @@ namespace CodeTestsConsole
             var ipAddress = addressList.First();
             var serverEndpoint = new IPEndPoint(ipAddress, 27005);
 
-everted             var server = new TcpServer(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueDepth: PacketQueueCapacity);
+            var server = new TcpServer(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueDepth: PacketQueueCapacity);
 
             server.Start(serverEndpoint, ProcessAsync);
 

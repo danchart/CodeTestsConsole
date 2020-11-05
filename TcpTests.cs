@@ -23,7 +23,7 @@ namespace CodeTestsConsole
             RunAsync().Wait();
         }
 
-        private static async Task<byte[]> ProcessAsync(byte[] data)
+        private static async Task<byte[]> ProcessAsync(byte[] data, CancellationToken token)
         {
             var requestMessage = MessagePackSerializer.Deserialize<SampleDataMsgPack>(
                 new ReadOnlyMemory<byte>(data, 0, data.Length));
@@ -46,7 +46,7 @@ namespace CodeTestsConsole
             const int PacketQueueCapacity = 256;
 
             const int TestRequestCount = 100000;
-            const int ClientCount = 10;
+            const int ClientCount = 5;
             const int ConcurrentRequestCount = 100;
 
             // Start TCP server.
@@ -60,12 +60,9 @@ namespace CodeTestsConsole
 
             var server = new TcpServer(Logger, clientCapacity: 2, maxPacketSize: MaxPacketSize, packetQueueDepth: PacketQueueCapacity);
 
-            var cts = new CancellationTokenSource();
-
             server.ProcessRequestAsyncCallback = ProcessAsync;
 
-            server.Start(serverEndpoint, cts.Token);
-
+            server.Start(serverEndpoint);
 
             // TCP clients connecto to server.
 
@@ -129,7 +126,7 @@ namespace CodeTestsConsole
 
                         await Task.WhenAny(
                             taskSendAll,
-                            Task.Delay(250));
+                            Task.Delay(250)).ConfigureAwait(false);
 
                         if (!taskSendAll.IsCompleted)
                         {
@@ -177,7 +174,8 @@ namespace CodeTestsConsole
             }
 
 
-            cts.Cancel();
+            server.Stop();
+
             //Processor.Stop = true;
 
             //while (thread.ThreadState != ThreadState.Stopped) { }

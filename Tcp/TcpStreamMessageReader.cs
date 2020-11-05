@@ -102,7 +102,7 @@
                     }
                     else
                     {
-                        state.Logger.Error($"Out of receive buffer space: capacity={state.ClientData.ReceiveBuffer.PacketCapacity}");
+                        state.Logger.Error($"Out of receive buffer space: localEp={state.ClientData.Client.Client.LocalEndPoint}, capacity={state.ClientData.ReceiveBuffer.PacketCapacity}");
                     }
 
                     // Shift accept read buffer to the next frame, if any.

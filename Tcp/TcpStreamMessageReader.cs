@@ -98,7 +98,7 @@
                         // Copy data minus frame preamble
                         Array.Copy(state.AcceptReadBuffer, FrameHeaderSizeByteCount, data, offset, state.MessageSize);
 
-                        state.ClientData.ReceiveBuffer.NextWrite(state.MessageSize, state.ClientData.Client, state.TransactionId);
+                        state.ClientData.ReceiveBuffer.NextWrite(state.MessageSize, state.ClientData.Stream, state.TransactionId);
                     }
                     else
                     {

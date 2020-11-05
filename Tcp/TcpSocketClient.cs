@@ -3,6 +3,7 @@
     using Common.Core;
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Net;
     using System.Net.Sockets;
     using System.Threading;
@@ -19,13 +20,13 @@
 
         private NetworkStream _stream;
 
-        private SendAndReceiveState[] _sendAndReceiveStates;
-        private int _sendAndReceiveStateCount;
+        private RequestAsyncState[] _requestAsyncStates;
+        private int _requestAsyncStateCount;
 
-        private int[] _freeSendAndReceiveStateIndices;
-        private int _freeSendAndReceiveStateCount;
+        private int[] _freeRequestAsyncStateIndices;
+        private int _freeRequestAsyncStateCount;
 
-        private readonly Dictionary<int, int> _transactionIdToStateIndex;
+        private readonly Dictionary<int, int> _idToRequestAsyncStateIndex;
 
         private readonly TcpClient _client;
 
@@ -44,12 +45,12 @@
             this._receiveBuffer = new TcpReceiveBuffer(maxPacketSize, packetQueueCapacity);
             this._tcpReceiver = new TcpStreamMessageReader(logger, maxPacketSize, packetQueueCapacity);
 
-            this._sendAndReceiveStates = new SendAndReceiveState[packetQueueCapacity];
-            this._freeSendAndReceiveStateIndices = new int[packetQueueCapacity];
-            this._transactionIdToStateIndex = new Dictionary<int, int>(packetQueueCapacity);
+            this._requestAsyncStates = new RequestAsyncState[packetQueueCapacity];
+            this._freeRequestAsyncStateIndices = new int[packetQueueCapacity];
+            this._idToRequestAsyncStateIndex = new Dictionary<int, int>(packetQueueCapacity);
 
-            this._sendAndReceiveStateCount = 0;
-            this._freeSendAndReceiveStateCount = 0;
+            this._requestAsyncStateCount = 0;
+            this._freeRequestAsyncStateCount = 0;
 
             this._receiveBuffer.OnWriteComplete = this.OnWriteComplete;
             this.OnCancelResponseTcs = OnSendAsyncCancellation;
@@ -75,8 +76,9 @@
 
         public void Disconnect()
         {
-            _stream.Close();
-            _client.Close();
+            this._stream.Close();
+            this._stream = null;
+            this._client.Close();
         }
 
         /// <summary>
@@ -92,27 +94,29 @@
 
             lock (_stateLock)
             {
-                if (this._freeSendAndReceiveStateCount > 0)
+                if (this._freeRequestAsyncStateCount > 0)
                 {
-                    index = this._freeSendAndReceiveStateIndices[--this._freeSendAndReceiveStateCount];
+                    index = this._freeRequestAsyncStateIndices[--this._freeRequestAsyncStateCount];
                 }
                 else
                 {
-                    if (this._sendAndReceiveStateCount == this._sendAndReceiveStates.Length)
+                    if (this._requestAsyncStateCount == this._requestAsyncStates.Length)
                     {
-                        Array.Resize(ref this._sendAndReceiveStates, 2 * this._sendAndReceiveStateCount);
-                        Array.Resize(ref this._freeSendAndReceiveStateIndices, 2 * this._sendAndReceiveStateCount);
+                        Array.Resize(ref this._requestAsyncStates, 2 * this._requestAsyncStateCount);
+                        Array.Resize(ref this._freeRequestAsyncStateIndices, 2 * this._requestAsyncStateCount);
                     }
 
-                    index = this._sendAndReceiveStateCount++;
+                    index = this._requestAsyncStateCount++;
                 }
 
                 transactionId = this._nextTransactionId++;
 
-                this._transactionIdToStateIndex[transactionId] = index;
+                Debug.Assert(!this._idToRequestAsyncStateIndex.ContainsKey(transactionId));
+
+                this._idToRequestAsyncStateIndex[transactionId] = index;
             }
 
-            ref var sendAndReceiveData = ref this._sendAndReceiveStates[index];
+            ref var sendAndReceiveData = ref this._requestAsyncStates[index];
 
             // Create and use a copy of the TCS as it can get deferenced in the sendAndReceive pool 
             // before we return.
@@ -143,9 +147,9 @@
             int offset,
             ushort count)
         {
-            lock (_streamWriteLock)
+            lock (this._streamWriteLock)
             {
-                _stream.WriteFrame(transactionId, data, offset, count);
+                this._stream.WriteFrame(transactionId, data, offset, count);
             }
         }
 
@@ -155,15 +159,15 @@
             {
                 ushort transactionId = (ushort)obj;
 
-                if (this._transactionIdToStateIndex.ContainsKey(transactionId))
+                if (this._idToRequestAsyncStateIndex.ContainsKey(transactionId))
                 {
-                    var index = this._transactionIdToStateIndex[transactionId];
+                    var index = this._idToRequestAsyncStateIndex[transactionId];
 
-                    this._transactionIdToStateIndex.Remove(transactionId);
+                    this._idToRequestAsyncStateIndex.Remove(transactionId);
 
-                    this._freeSendAndReceiveStateIndices[this._freeSendAndReceiveStateCount++] = index;
+                    this._freeRequestAsyncStateIndices[this._freeRequestAsyncStateCount++] = index;
 
-                    ref var state = ref this._sendAndReceiveStates[index];
+                    ref var state = ref this._requestAsyncStates[index];
 
                     var tcs = state.Tcs;
 
@@ -185,20 +189,20 @@
             byte[] data,
             int offset,
             int size,
-            TcpClient tcpClient,
+            NetworkStream stream,
             ushort transactionId)
         {
             lock (_stateLock)
             {
-                if (this._transactionIdToStateIndex.ContainsKey(transactionId))
+                if (this._idToRequestAsyncStateIndex.ContainsKey(transactionId))
                 {
-                    var index = this._transactionIdToStateIndex[transactionId];
+                    var index = this._idToRequestAsyncStateIndex[transactionId];
 
-                    this._transactionIdToStateIndex.Remove(transactionId);
+                    this._idToRequestAsyncStateIndex.Remove(transactionId);
 
-                    this._freeSendAndReceiveStateIndices[this._freeSendAndReceiveStateCount++] = index;
+                    this._freeRequestAsyncStateIndices[this._freeRequestAsyncStateCount++] = index;
 
-                    ref var state = ref this._sendAndReceiveStates[index];
+                    ref var state = ref this._requestAsyncStates[index];
 
                     var tcs = state.Tcs;
 
@@ -225,12 +229,16 @@
 
                     return true;
                 }
+                else
+                {
+                    Debug.Assert(false);
+                }
             }
 
             return false;
         }
 
-        internal struct SendAndReceiveState
+        internal struct RequestAsyncState
         {
             public CancellationTokenSource CancellationTokenSource;
             public TaskCompletionSource<TcpResponseMessage> Tcs;

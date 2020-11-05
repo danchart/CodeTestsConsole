@@ -12,7 +12,7 @@ namespace Networking.Core
     {
         public delegate Task<byte[]> ProcessAsync(byte[] data);
 
-        public ProcessAsync ProcessAsyncCallback;
+        public ProcessAsync ProcessRequestAsyncCallback;
 
         private CancellationToken _token;
 
@@ -21,7 +21,8 @@ namespace Networking.Core
         private readonly List<TcpReceiveBuffer> _receiveBuffers;
         private readonly ILogger _logger;
 
-        private readonly object _lock = new object();
+        private readonly object _receiveBufferLock = new object();
+        private readonly object _streamWriteLock = new object();
 
         private readonly List<TcpReceiveBuffer> _pendingAddBuffers = new List<TcpReceiveBuffer>();
         private readonly List<TcpReceiveBuffer> _pendingRemoveBuffers = new List<TcpReceiveBuffer>();
@@ -68,17 +69,18 @@ namespace Networking.Core
         //    this._stop = true;
         //}
 
-        private async static Task ProcessDelegateAsync(ProcessState state)
+        private async static Task HandleRequestAsync(ProcessState state)
         {
-            var responseData = await state.CallbackAsync(state.Data).ConfigureAwait(false);
+            var responseData = await state.RequestCallbackAsync(state.Data).ConfigureAwait(false);
 
             if (responseData != null)
             {
-                var stream = state.RemoteClient.GetStream();
-
                 try
                 {
-                    stream.WriteFrame(transactionId: state.TransactionId, data: responseData, offset: 0, count: (ushort)responseData.Length);
+                    lock (state.StreamWriteLock)
+                    {
+                        state.Stream.WriteFrame(transactionId: state.TransactionId, data: responseData, offset: 0, count: (ushort)responseData.Length);
+                    }
                 }
                 catch (Exception e)
                 {
@@ -115,14 +117,14 @@ namespace Networking.Core
                             var dataCopy = new byte[count];
                             Array.Copy(data, offset, dataCopy, 0, count);
 
-                            buffer.GetState(out TcpClient remoteClient, out ushort transactionId);
-                            buffer.NextRead(closeConnection: false);
+                            buffer.GetState(out NetworkStream stream, out ushort transactionId);
+                            buffer.NextRead();
 
                             if (taskCount == tasks.Length)
                             {
                                 // Clean up completed tasks
 
-                                Task.WhenAny(tasks).Wait();
+                                Task.WaitAny(tasks);
 
                                 for (int i = taskCount - 1; i >= 0; i--)
                                 {
@@ -139,13 +141,14 @@ namespace Networking.Core
                             }
 
                             ref var state = ref states[taskCount];
-                            state.CallbackAsync = ProcessAsyncCallback;
+                            state.StreamWriteLock = this._streamWriteLock;
+                            state.RequestCallbackAsync = ProcessRequestAsyncCallback;
                             state.Data = dataCopy;
-                            state.RemoteClient = remoteClient;
+                            state.Stream = stream; 
                             state.TransactionId = transactionId;
                             state.Logger = _logger;
 
-                            tasks[taskCount++] = ProcessDelegateAsync(state);
+                            tasks[taskCount++] = HandleRequestAsync(state);
                         }
                     }
                 }
@@ -162,7 +165,7 @@ namespace Networking.Core
         {
             if (this._lockCount == 1)
             {
-                lock (this._lock)
+                lock (this._receiveBufferLock)
                 {
                     foreach (var receiveBuffer in this._pendingRemoveBuffers)
                     {
@@ -187,7 +190,7 @@ namespace Networking.Core
         {
             if (this._lockCount > 0)
             {
-                lock (this._lock)
+                lock (this._receiveBufferLock)
                 {
                     _pendingRemoveBuffers.Add(e.ReceiveBuffer);
                 }
@@ -198,7 +201,7 @@ namespace Networking.Core
         {
             if (this._lockCount > 0)
             {
-                lock (this._lock)
+                lock (this._receiveBufferLock)
                 {
                     _pendingAddBuffers.Add(e.ReceiveBuffer);
                 }
@@ -207,9 +210,11 @@ namespace Networking.Core
 
         private struct ProcessState
         {
-            public ProcessAsync CallbackAsync;
+            public object StreamWriteLock;
+
+            public ProcessAsync RequestCallbackAsync;
             public byte[] Data;
-            public TcpClient RemoteClient;
+            public NetworkStream Stream;
             public ushort TransactionId;
             public ILogger Logger;
         }

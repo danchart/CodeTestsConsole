@@ -16,8 +16,6 @@ namespace CodeTestsConsole
     {
         internal static ILogger Logger = new ConsoleLogger(maxLevel: 5);
 
-        //internal static ServerProcessor Processor;
-
         internal static Random Random = new Random();
 
         public static void TcpClientServerSendReceive()
@@ -64,7 +62,7 @@ namespace CodeTestsConsole
 
             var cts = new CancellationTokenSource();
 
-            server.ProcessAsyncCallback = ProcessAsync;
+            server.ProcessRequestAsyncCallback = ProcessAsync;
 
             server.Start(serverEndpoint, cts.Token);
 

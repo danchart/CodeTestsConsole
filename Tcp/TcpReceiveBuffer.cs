@@ -8,7 +8,7 @@
             byte[] data, 
             int offset, 
             int size, 
-            TcpClient client, 
+            NetworkStream stream, 
             ushort transactionId);
 
         public OnBeforeWriteCompleteAction OnWriteComplete;
@@ -84,13 +84,13 @@
             }
         }
 
-        public void NextWrite(int bytesReceived, TcpClient tcpClient, ushort transactionId)
+        public void NextWrite(int bytesReceived, NetworkStream stream, ushort transactionId)
         {
             var writeIndex = GetWriteIndex();
 
             if (OnWriteComplete != null) 
             {
-                if (OnWriteComplete(this._data, writeIndex * this.MaxPacketSize, bytesReceived, tcpClient, transactionId))
+                if (OnWriteComplete(this._data, writeIndex * this.MaxPacketSize, bytesReceived, stream, transactionId))
                 {
                     // Write processed by callback, don't update head position.
                     return;
@@ -98,17 +98,17 @@
             }
 
             this._bytedReceived[writeIndex] = bytesReceived;
-            this._states[writeIndex].Client = tcpClient;
+            this._states[writeIndex].Stream = stream;
             this._states[writeIndex].TransactionId = transactionId;
 
             this._unwrappedHeadIndex = (this._unwrappedHeadIndex + 1) % (2 * this.PacketCapacity);
         }
 
-        public bool GetState(out TcpClient client, out ushort transactionId)
+        public bool GetState(out NetworkStream stream, out ushort transactionId)
         {
             if (this.Count == 0)
             {
-                client = default;
+                stream = default;
                 transactionId = default;
 
                 return false;
@@ -117,7 +117,7 @@
             {
                 var readIndex = GetReadIndex();
 
-                client = this._states[readIndex].Client;
+                stream = this._states[readIndex].Stream;
                 transactionId = this._states[readIndex].TransactionId;
 
                 return true;
@@ -146,16 +146,11 @@
             }
         }
 
-        public void NextRead(bool closeConnection)
+        public void NextRead()
         {
             var readIndex = GetReadIndex();
 
-            if (closeConnection)
-            {
-                this._states[readIndex].Client.Close();
-            }
-
-            this._states[readIndex].Client = null; // For GC
+            this._states[readIndex].Stream = null; // For GC
 
             this._unwrappedTailIndex = (this._unwrappedTailIndex + 1) % (2 * this.PacketCapacity);
         }
@@ -165,7 +160,7 @@
 
         private struct TcpReceiveBufferState
         {
-            public TcpClient Client;
+            public NetworkStream Stream;
             public ushort TransactionId;
         }
     }
